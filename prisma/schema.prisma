@@ -1,0 +1,214 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Host users who can create workspaces
+model Host {
+  id            String      @id @default(uuid())
+  email         String      @unique
+  password      String
+  name          String
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  workspaces    Workspace[]
+}
+
+// Each workspace is a separate chat platform
+model Workspace {
+  id              String            @id @default(uuid())
+  hostId          String
+  name            String
+  slug            String            @unique
+  inviteCode      String            @unique
+  settings        WorkspaceSettings?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  host            Host              @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  members         WorkspaceMember[]
+  messages        Message[]
+  groups          Group[]
+  blockedUsers    BlockedUser[]
+  spamReports     SpamReport[]
+
+  @@index([hostId])
+  @@index([slug])
+}
+
+// Customizable settings for each workspace
+model WorkspaceSettings {
+  id              String    @id @default(uuid())
+  workspaceId     String    @unique
+  primaryColor    String    @default("#3b82f6")
+  secondaryColor  String    @default("#10b981")
+  logo            String?
+  welcomeMessage  String?
+  allowGroupChat  Boolean   @default(true)
+  maxGroupSize    Int       @default(100)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+// Client users who join workspaces
+model User {
+  id                String            @id @default(uuid())
+  email             String            @unique
+  password          String
+  username          String
+  avatar            String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  workspaces        WorkspaceMember[]
+  sentMessages      Message[]
+  sentFriendRequests Friendship[]     @relation("FriendshipSender")
+  receivedFriendRequests Friendship[] @relation("FriendshipReceiver")
+  groupMemberships  GroupMember[]
+  blockedBy         BlockedUser[]
+  spamReports       SpamReport[]
+
+  @@index([email])
+  @@index([username])
+}
+
+// Join table for users in workspaces
+model WorkspaceMember {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  memberTag   String    // Unique identifier within workspace (e.g., "1234" for username#1234)
+  role        String    @default("member") // member, admin
+  joinedAt    DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@unique([workspaceId, memberTag])
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([memberTag])
+}
+
+// Friend relationships within a workspace
+model Friendship {
+  id          String    @id @default(uuid())
+  workspaceId String
+  senderId    String
+  receiverId  String
+  status      String    @default("pending") // pending, accepted, rejected
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  sender      User      @relation("FriendshipSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User      @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, senderId, receiverId])
+  @@index([workspaceId])
+  @@index([senderId])
+  @@index([receiverId])
+}
+
+// Messages in direct chats or groups
+model Message {
+  id          String    @id @default(uuid())
+  workspaceId String
+  senderId    String
+  groupId     String?   // null for direct messages
+  receiverId  String?   // null for group messages
+  content     String
+  type        String    @default("text") // text, image, file, system
+  fileUrl     String?
+  readBy      String    @default("[]") // JSON array of user IDs
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  sender      User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  group       Group?    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([senderId])
+  @@index([groupId])
+  @@index([receiverId])
+  @@index([createdAt])
+}
+
+// Group chats
+model Group {
+  id          String        @id @default(uuid())
+  workspaceId String
+  name        String
+  avatar      String?
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  members     GroupMember[]
+  messages    Message[]
+
+  @@index([workspaceId])
+}
+
+// Group members
+model GroupMember {
+  id        String   @id @default(uuid())
+  groupId   String
+  userId    String
+  role      String   @default("member") // member, admin
+  joinedAt  DateTime @default(now())
+
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+}
+
+// Blocked users by host
+model BlockedUser {
+  id          String    @id @default(uuid())
+  workspaceId String
+  userId      String
+  reason      String?
+  blockedAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+}
+
+// Spam reports
+model SpamReport {
+  id          String    @id @default(uuid())
+  workspaceId String
+  reporterId  String
+  messageId   String
+  reason      String
+  status      String    @default("pending") // pending, reviewed, resolved
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  reporter    User      @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([reporterId])
+  @@index([status])
+}

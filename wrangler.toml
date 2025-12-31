@@ -1,0 +1,16 @@
+name = "chat-saas"
+compatibility_date = "2024-12-01"
+pages_build_output_dir = ".vercel/output/static"
+account_id = "71184b988be37c368ead7c17a3055918"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "chat-db"
+database_id = "a3738f36-159f-4ca4-8647-f90c8ce78c92"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "chat-storage"
+
+[vars]
+ENVIRONMENT = "production"
