@@ -1,19 +1,56 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { validateEmail, validatePassword } from '@/lib/utils';
+import OAuthButtons from '@/components/OAuthButtons';
+import { appendLangToHref, getTranslations } from '@/lib/i18n';
+import { useLang, useLangHref } from '@/hooks/useLang';
 
 export default function HostLoginPage() {
   const router = useRouter();
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const lang = useLang();
+  const t = getTranslations(lang);
+  const withLang = useLangHref();
 
   // Form state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+
+  // Handle OAuth redirect with token
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('token');
+    const userStr = params.get('user');
+    const errorParam = params.get('error');
+
+    if (errorParam) {
+      setError(decodeURIComponent(errorParam));
+      // Clean URL
+      window.history.replaceState({}, '', appendLangToHref(window.location.pathname, lang));
+      return;
+    }
+
+    if (token && userStr) {
+      try {
+        const user = JSON.parse(decodeURIComponent(userStr));
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        localStorage.setItem('userType', 'host');
+
+        // Redirect to dashboard
+        router.push(appendLangToHref('/host/dashboard', lang));
+      } catch (err) {
+        setError(t.auth.common.loginFailed);
+        window.history.replaceState({}, '', appendLangToHref(window.location.pathname, lang));
+      }
+    }
+  }, [lang, router, t.auth.common.loginFailed]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,19 +58,19 @@ export default function HostLoginPage() {
 
     // Validation
     if (!validateEmail(email)) {
-      setError('Please enter a valid email address');
+      setError(t.auth.common.invalidEmail);
       return;
     }
 
     if (!isLogin) {
       const passwordValidation = validatePassword(password);
       if (!passwordValidation.valid) {
-        setError(passwordValidation.error || 'Invalid password');
+        setError(passwordValidation.error || t.auth.common.invalidPassword);
         return;
       }
 
       if (!name.trim()) {
-        setError('Please enter your name');
+        setError(t.auth.common.nameRequired);
         return;
       }
     }
@@ -61,12 +98,12 @@ export default function HostLoginPage() {
         localStorage.setItem('userType', 'host');
 
         // Redirect to dashboard
-        router.push('/host/dashboard');
+        router.push(withLang('/host/dashboard'));
       } else {
-        setError(data.error || 'Authentication failed');
+        setError(data.error || t.auth.common.authFailed);
       }
     } catch (err) {
-      setError('Network error. Please try again.');
+      setError(t.auth.common.networkError);
     } finally {
       setLoading(false);
     }
@@ -122,12 +159,12 @@ export default function HostLoginPage() {
         localStorage.setItem('userType', 'host');
 
         // Redirect to dashboard
-        router.push('/host/dashboard');
+        router.push(withLang('/host/dashboard'));
       } else {
-        setError(data.error || 'Quick login failed');
+        setError(data.error || t.auth.common.quickLoginFailed);
       }
     } catch (err) {
-      setError('Network error. Please try again.');
+      setError(t.auth.common.networkError);
     } finally {
       setLoading(false);
     }
@@ -153,9 +190,9 @@ export default function HostLoginPage() {
               />
             </svg>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Host Portal</h1>
+          <h1 className="text-3xl font-bold text-gray-900">{t.auth.host.portalTitle}</h1>
           <p className="text-gray-600 mt-2">
-            {isLogin ? 'Sign in to your account' : 'Create your host account'}
+            {isLogin ? t.auth.host.subtitleLogin : t.auth.host.subtitleRegister}
           </p>
         </div>
 
@@ -171,14 +208,14 @@ export default function HostLoginPage() {
           {!isLogin && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Full Name
+                {t.auth.common.fullNameLabel}
               </label>
               <input
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
-                placeholder="John Doe"
+                placeholder={t.auth.common.fullNamePlaceholder}
                 disabled={loading}
               />
             </div>
@@ -186,28 +223,28 @@ export default function HostLoginPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Email Address
+              {t.auth.common.emailAddressLabel}
             </label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
-              placeholder="host@example.com"
+              placeholder={t.auth.common.emailPlaceholderHost}
               disabled={loading}
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Password
+              {t.auth.common.passwordLabel}
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
-              placeholder="••••••••"
+              placeholder={t.auth.common.passwordPlaceholder}
               disabled={loading}
             />
           </div>
@@ -219,30 +256,44 @@ export default function HostLoginPage() {
           >
             {loading ? (
               <div className="flex items-center justify-center gap-2">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                <span>Please wait...</span>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                <span>{t.auth.common.pleaseWait}</span>
               </div>
             ) : isLogin ? (
-              'Sign In'
+              t.auth.common.signIn
             ) : (
-              'Create Account'
+              t.auth.common.createAccount
             )}
           </button>
         </form>
+
+        {/* OAuth Login Buttons */}
+        <div className="mt-6">
+          <div className="relative mb-4">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-300"></div>
+            </div>
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white text-gray-500">{t.auth.common.orUse}</span>
+            </div>
+          </div>
+
+          <OAuthButtons userType="host" disabled={loading} />
+        </div>
 
         {/* Quick Login Button */}
         {isLogin && (
           <div className="mt-4">
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-300"></div>
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-gray-500">或</span>
-              </div>
+              <div className="w-full border-t border-gray-300"></div>
             </div>
-            <button
-              type="button"
+            <div className="relative flex justify-center text-sm">
+              <span className="px-2 bg-white text-gray-500">{t.auth.common.or}</span>
+            </div>
+          </div>
+          <button
+            type="button"
               onClick={handleQuickLogin}
               disabled={loading}
               className="w-full mt-4 py-3 px-4 bg-white border-2 border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
@@ -250,7 +301,7 @@ export default function HostLoginPage() {
               {loading ? (
                 <div className="flex items-center justify-center gap-2">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-700"></div>
-                  <span>Please wait...</span>
+                  <span>{t.auth.common.pleaseWait}</span>
                 </div>
               ) : (
                 <div className="flex items-center justify-center gap-2">
@@ -267,7 +318,7 @@ export default function HostLoginPage() {
                       d="M13 10V3L4 14h7v7l9-11h-7z"
                     />
                   </svg>
-                  <span>快速登入 (Demo)</span>
+                  <span>{t.auth.common.quickLogin}</span>
                 </div>
               )}
             </button>
@@ -285,19 +336,19 @@ export default function HostLoginPage() {
             className="text-green-600 hover:text-green-700 font-medium"
           >
             {isLogin
-              ? "Don't have an account? Sign up"
-              : 'Already have an account? Sign in'}
+              ? t.auth.host.toggleToRegister
+              : t.auth.host.toggleToLogin}
           </button>
         </div>
 
         {/* Client Portal Link */}
         <div className="mt-4 text-center">
-          <a
-            href="/client/login"
+          <Link
+            href={withLang("/client/login")}
             className="text-sm text-gray-500 hover:text-gray-700"
           >
-            Are you a client? Click here
-          </a>
+            {t.auth.host.clientPortalLink}
+          </Link>
         </div>
       </div>
     </div>

@@ -67,3 +67,46 @@ export function isUserOnline(lastSeenAt: Date | string | null | undefined): bool
   // Consider user online if they were active in the last 2 minutes
   return diffMinutes < 2;
 }
+
+export function normalizeHexColor(value: string | undefined, fallback: string): string {
+  if (!value) return fallback;
+
+  let hex = value.trim();
+  if (!hex.startsWith('#')) {
+    hex = `#${hex}`;
+  }
+
+  const shortMatch = /^#([0-9a-fA-F]{3})$/;
+  if (shortMatch.test(hex)) {
+    const [, short] = hex.match(shortMatch) || [];
+    if (short) {
+      hex = `#${short[0]}${short[0]}${short[1]}${short[1]}${short[2]}${short[2]}`;
+    }
+  }
+
+  if (!/^#([0-9a-fA-F]{6})$/.test(hex)) {
+    return fallback;
+  }
+
+  return hex.toLowerCase();
+}
+
+export function hexToRgba(hex: string, alpha: number): string {
+  const normalized = normalizeHexColor(hex, '#000000');
+  const r = parseInt(normalized.slice(1, 3), 16);
+  const g = parseInt(normalized.slice(3, 5), 16);
+  const b = parseInt(normalized.slice(5, 7), 16);
+  const safeAlpha = Math.min(Math.max(alpha, 0), 1);
+
+  return `rgba(${r}, ${g}, ${b}, ${safeAlpha})`;
+}
+
+export function getContrastColor(hex: string): string {
+  const normalized = normalizeHexColor(hex, '#000000');
+  const r = parseInt(normalized.slice(1, 3), 16);
+  const g = parseInt(normalized.slice(3, 5), 16);
+  const b = parseInt(normalized.slice(5, 7), 16);
+
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#111827' : '#ffffff';
+}

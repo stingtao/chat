@@ -1,11 +1,17 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Workspace, WorkspaceMember, SpamReport } from '@/lib/types';
+import { getTranslations } from '@/lib/i18n';
+import { useLang, useLangHref } from '@/hooks/useLang';
 
 export default function HostDashboardPage() {
   const router = useRouter();
+  const lang = useLang();
+  const t = getTranslations(lang);
+  const withLang = useLangHref();
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -14,10 +20,23 @@ export default function HostDashboardPage() {
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [spamReports, setSpamReports] = useState<SpamReport[]>([]);
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'spam'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'spam' | 'settings'>('overview');
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [settingsForm, setSettingsForm] = useState({
+    name: '',
+    primaryColor: '#3b82f6',
+    secondaryColor: '#10b981',
+    logo: '',
+    welcomeMessage: '',
+    allowGroupChat: true,
+    maxGroupSize: 100,
+  });
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsSuccess, setSettingsSuccess] = useState('');
+  const [logoUploading, setLogoUploading] = useState(false);
 
   // Initialize auth
   useEffect(() => {
@@ -26,7 +45,7 @@ export default function HostDashboardPage() {
     const userType = localStorage.getItem('userType');
 
     if (!storedToken || !storedUser || userType !== 'host') {
-      router.push('/host/login');
+      router.push(withLang('/host/login'));
       return;
     }
 
@@ -97,11 +116,27 @@ export default function HostDashboardPage() {
     loadWorkspaceData();
   }, [selectedWorkspace, token]);
 
+  useEffect(() => {
+    if (!selectedWorkspace) return;
+
+    setSettingsForm({
+      name: selectedWorkspace.name,
+      primaryColor: selectedWorkspace.settings?.primaryColor || '#3b82f6',
+      secondaryColor: selectedWorkspace.settings?.secondaryColor || '#10b981',
+      logo: selectedWorkspace.settings?.logo || '',
+      welcomeMessage: selectedWorkspace.settings?.welcomeMessage || '',
+      allowGroupChat: selectedWorkspace.settings?.allowGroupChat ?? true,
+      maxGroupSize: selectedWorkspace.settings?.maxGroupSize ?? 100,
+    });
+    setSettingsError('');
+    setSettingsSuccess('');
+  }, [selectedWorkspace]);
+
   const handleLogout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
     localStorage.removeItem('userType');
-    router.push('/host/login');
+    router.push(withLang('/host/login'));
   };
 
   const handleCreateWorkspace = async (e: React.FormEvent) => {
@@ -109,12 +144,12 @@ export default function HostDashboardPage() {
     setCreateError('');
 
     if (!newWorkspaceName.trim()) {
-      setCreateError('Workspace name is required');
+      setCreateError(t.hostDashboard.errors.workspaceNameRequired);
       return;
     }
 
     if (!token) {
-      setCreateError('No authentication token found. Please login again.');
+      setCreateError(t.hostDashboard.errors.missingToken);
       return;
     }
 
@@ -145,12 +180,130 @@ export default function HostDashboardPage() {
         setNewWorkspaceName('');
         setShowCreateWorkspace(false);
       } else {
-        setCreateError(data.error || 'Failed to create workspace');
+        setCreateError(data.error || t.hostDashboard.errors.createFailed);
       }
     } catch (error) {
-      setCreateError('Network error. Please try again.');
+      setCreateError(t.hostDashboard.errors.networkError);
     } finally {
       setCreateLoading(false);
+    }
+  };
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedWorkspace || !token) return;
+
+    const trimmedName = settingsForm.name.trim();
+    if (!trimmedName) {
+      setSettingsError(t.hostDashboard.errors.workspaceNameRequired);
+      return;
+    }
+
+    setSettingsLoading(true);
+    setSettingsError('');
+    setSettingsSuccess('');
+
+    try {
+      if (trimmedName !== selectedWorkspace.name) {
+        const nameResponse = await fetch(`/api/host/workspace/${selectedWorkspace.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ name: trimmedName }),
+        });
+
+        const nameData = await nameResponse.json();
+        if (!nameData.success) {
+          throw new Error(nameData.error || 'Failed to update workspace name');
+        }
+      }
+
+      const settingsResponse = await fetch(`/api/host/workspace/${selectedWorkspace.id}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          primaryColor: settingsForm.primaryColor,
+          secondaryColor: settingsForm.secondaryColor,
+          logo: settingsForm.logo || null,
+          welcomeMessage: settingsForm.welcomeMessage || null,
+          allowGroupChat: settingsForm.allowGroupChat,
+          maxGroupSize: Number(settingsForm.maxGroupSize) || 100,
+        }),
+      });
+
+      const settingsData = await settingsResponse.json();
+      if (!settingsData.success) {
+        throw new Error(settingsData.error || 'Failed to update settings');
+      }
+
+      const updatedWorkspace = {
+        ...selectedWorkspace,
+        name: trimmedName,
+        settings: settingsData.data,
+      };
+
+      setSelectedWorkspace(updatedWorkspace);
+      setWorkspaces((prev) =>
+        prev.map((workspace) =>
+          workspace.id === updatedWorkspace.id ? updatedWorkspace : workspace
+        )
+      );
+      setSettingsSuccess(t.hostDashboard.settings.saved);
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : t.hostDashboard.errors.saveFailed);
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !token) return;
+
+    if (!file.type.startsWith('image/')) {
+      setSettingsError(t.hostDashboard.errors.logoImageOnly);
+      if (logoInputRef.current) {
+        logoInputRef.current.value = '';
+      }
+      return;
+    }
+
+    setLogoUploading(true);
+    setSettingsError('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (!data.success || !data.data?.url) {
+        throw new Error(data.error || t.hostDashboard.errors.logoUploadFailed);
+      }
+
+      setSettingsForm((prev) => ({
+        ...prev,
+        logo: data.data.url,
+      }));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : t.hostDashboard.errors.logoUploadFailed);
+    } finally {
+      setLogoUploading(false);
+      if (logoInputRef.current) {
+        logoInputRef.current.value = '';
+      }
     }
   };
 
@@ -184,20 +337,20 @@ export default function HostDashboardPage() {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Host Dashboard</h1>
+              <h1 className="text-xl font-bold text-gray-900">{t.hostDashboard.title}</h1>
               <p className="text-sm text-gray-600">{user?.name}</p>
               <p className="text-xs text-gray-500">{user?.email}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowCreateWorkspace(true)}
-              className="px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors"
-            >
-              Create Workspace
-            </button>
+              <button
+                type="button"
+                onClick={() => setShowCreateWorkspace(true)}
+                className="px-4 py-2 bg-green-500 text-white rounded-lg font-medium hover:bg-green-600 transition-colors"
+              >
+                {t.hostDashboard.createWorkspace}
+              </button>
             <button
               type="button"
               onClick={handleLogout}
@@ -227,7 +380,7 @@ export default function HostDashboardPage() {
           {/* Workspace Sidebar */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-lg shadow-sm p-4">
-              <h2 className="font-semibold text-gray-900 mb-4">Workspaces</h2>
+              <h2 className="font-semibold text-gray-900 mb-4">{t.hostDashboard.workspacesTitle}</h2>
               <div className="space-y-2">
                 {workspaces.map((workspace) => (
                   <button
@@ -251,7 +404,7 @@ export default function HostDashboardPage() {
 
                 {workspaces.length === 0 && (
                   <div className="text-center py-8 text-gray-500 text-sm">
-                    No workspaces yet
+                    {t.hostDashboard.noWorkspaces}
                   </div>
                 )}
               </div>
@@ -274,7 +427,7 @@ export default function HostDashboardPage() {
                           : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
-                      Overview
+                      {t.hostDashboard.tabs.overview}
                     </button>
                     <button
                       type="button"
@@ -285,7 +438,7 @@ export default function HostDashboardPage() {
                           : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
-                      Members ({members.length})
+                      {t.hostDashboard.tabs.members} ({members.length})
                     </button>
                     <button
                       type="button"
@@ -296,7 +449,18 @@ export default function HostDashboardPage() {
                           : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
-                      Spam Reports ({spamReports.length})
+                      {t.hostDashboard.tabs.spam} ({spamReports.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('settings')}
+                      className={`pb-3 px-1 font-medium transition-colors ${
+                        activeTab === 'settings'
+                          ? 'text-green-600 border-b-2 border-green-600'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {t.hostDashboard.tabs.settings}
                     </button>
                   </div>
                 </div>
@@ -310,14 +474,15 @@ export default function HostDashboardPage() {
                           {selectedWorkspace.name}
                         </h2>
                         <p className="text-gray-600">
-                          Slug: <span className="font-mono">{selectedWorkspace.slug}</span>
+                          {t.hostDashboard.overview.slugLabel}:{' '}
+                          <span className="font-mono">{selectedWorkspace.slug}</span>
                         </p>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
                         <div className="p-4 bg-blue-50 rounded-lg">
                           <div className="text-sm text-blue-600 font-medium">
-                            Total Members
+                            {t.hostDashboard.overview.totalMembers}
                           </div>
                           <div className="text-3xl font-bold text-blue-900 mt-1">
                             {members.length}
@@ -325,7 +490,7 @@ export default function HostDashboardPage() {
                         </div>
                         <div className="p-4 bg-red-50 rounded-lg">
                           <div className="text-sm text-red-600 font-medium">
-                            Spam Reports
+                            {t.hostDashboard.overview.spamReports}
                           </div>
                           <div className="text-3xl font-bold text-red-900 mt-1">
                             {spamReports.filter(r => r.status === 'pending').length}
@@ -335,7 +500,7 @@ export default function HostDashboardPage() {
 
                       <div className="border-t pt-6">
                         <h3 className="font-semibold text-gray-900 mb-3">
-                          Invite Code
+                          {t.hostDashboard.overview.inviteCode}
                         </h3>
                         <div className="flex items-center gap-2">
                           <code className="flex-1 px-4 py-3 bg-gray-100 rounded-lg font-mono text-lg">
@@ -345,11 +510,11 @@ export default function HostDashboardPage() {
                             type="button"
                             onClick={() => {
                               navigator.clipboard.writeText(selectedWorkspace.inviteCode);
-                              alert('Invite code copied!');
+                              alert(t.hostDashboard.overview.copied);
                             }}
                             className="px-4 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
                           >
-                            Copy
+                            {t.hostDashboard.overview.copy}
                           </button>
                         </div>
                       </div>
@@ -359,7 +524,7 @@ export default function HostDashboardPage() {
                   {activeTab === 'members' && (
                     <div>
                       <h3 className="font-semibold text-gray-900 mb-4">
-                        Workspace Members
+                        {t.hostDashboard.members.title}
                       </h3>
                       <div className="space-y-2">
                         {members.map((member) => (
@@ -369,21 +534,23 @@ export default function HostDashboardPage() {
                           >
                             <div>
                               <div className="font-medium text-gray-900">
-                                {member.user?.username || 'Unknown'}
+                                {member.user?.username || t.common.unknown}
                               </div>
                               <div className="text-sm text-gray-500">
-                                {member.user?.email || 'No email'}
+                                {member.user?.email || t.common.noEmail}
                               </div>
                             </div>
                             <div className="text-sm text-gray-500">
-                              Joined {new Date(member.joinedAt).toLocaleDateString()}
+                              {t.hostDashboard.members.joined(
+                                new Date(member.joinedAt).toLocaleDateString()
+                              )}
                             </div>
                           </div>
                         ))}
 
                         {members.length === 0 && (
                           <div className="text-center py-8 text-gray-500">
-                            No members yet
+                            {t.hostDashboard.members.empty}
                           </div>
                         )}
                       </div>
@@ -393,7 +560,7 @@ export default function HostDashboardPage() {
                   {activeTab === 'spam' && (
                     <div>
                       <h3 className="font-semibold text-gray-900 mb-4">
-                        Spam Reports
+                        {t.hostDashboard.spam.title}
                       </h3>
                       <div className="space-y-2">
                         {spamReports.map((report) => (
@@ -403,7 +570,9 @@ export default function HostDashboardPage() {
                           >
                             <div className="flex items-start justify-between mb-2">
                               <div className="font-medium text-gray-900">
-                                Reported by {report.reporter?.username || 'Unknown'}
+                                {t.hostDashboard.spam.reportedBy(
+                                  report.reporter?.username || t.common.unknown
+                                )}
                               </div>
                               <span
                                 className={`px-2 py-1 text-xs rounded ${
@@ -414,7 +583,7 @@ export default function HostDashboardPage() {
                                     : 'bg-green-100 text-green-800'
                                 }`}
                               >
-                                {report.status}
+                                {t.hostDashboard.spam.status[report.status] || report.status}
                               </span>
                             </div>
                             <div className="text-sm text-gray-600">
@@ -428,10 +597,242 @@ export default function HostDashboardPage() {
 
                         {spamReports.length === 0 && (
                           <div className="text-center py-8 text-gray-500">
-                            No spam reports
+                            {t.hostDashboard.spam.empty}
                           </div>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'settings' && (
+                    <div className="space-y-6">
+                      <div>
+                        <h3 className="font-semibold text-gray-900 mb-1">
+                          {t.hostDashboard.settings.title}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          {t.hostDashboard.settings.subtitle}
+                        </p>
+                      </div>
+
+                      {settingsError && (
+                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                          {settingsError}
+                        </div>
+                      )}
+
+                      {settingsSuccess && (
+                        <div className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+                          {settingsSuccess}
+                        </div>
+                      )}
+
+                      <form onSubmit={handleSaveSettings} className="space-y-6">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            {t.hostDashboard.settings.workspaceNameLabel}
+                          </label>
+                          <input
+                            type="text"
+                            value={settingsForm.name}
+                            onChange={(e) =>
+                              setSettingsForm((prev) => ({ ...prev, name: e.target.value }))
+                            }
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
+                            placeholder={t.hostDashboard.settings.workspaceNameLabel}
+                            maxLength={60}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              {t.hostDashboard.settings.primaryColor}
+                            </label>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="color"
+                                value={settingsForm.primaryColor}
+                                onChange={(e) =>
+                                  setSettingsForm((prev) => ({
+                                    ...prev,
+                                    primaryColor: e.target.value,
+                                  }))
+                                }
+                                className="h-12 w-12 rounded-lg border border-gray-200"
+                              />
+                              <input
+                                type="text"
+                                value={settingsForm.primaryColor}
+                                onChange={(e) =>
+                                  setSettingsForm((prev) => ({
+                                    ...prev,
+                                    primaryColor: e.target.value,
+                                  }))
+                                }
+                                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                                placeholder="#3b82f6"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              {t.hostDashboard.settings.secondaryColor}
+                            </label>
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="color"
+                                value={settingsForm.secondaryColor}
+                                onChange={(e) =>
+                                  setSettingsForm((prev) => ({
+                                    ...prev,
+                                    secondaryColor: e.target.value,
+                                  }))
+                                }
+                                className="h-12 w-12 rounded-lg border border-gray-200"
+                              />
+                              <input
+                                type="text"
+                                value={settingsForm.secondaryColor}
+                                onChange={(e) =>
+                                  setSettingsForm((prev) => ({
+                                    ...prev,
+                                    secondaryColor: e.target.value,
+                                  }))
+                                }
+                                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                                placeholder="#10b981"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-[auto,1fr] gap-4 items-center">
+                          <div className="w-20 h-20 rounded-2xl bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden">
+                            {settingsForm.logo ? (
+                              <img
+                                src={settingsForm.logo}
+                                alt={t.hostDashboard.settings.logoLabel}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-sm text-gray-500">{t.hostDashboard.settings.logoFallback}</span>
+                            )}
+                          </div>
+                          <div className="space-y-3">
+                            <label className="block text-sm font-medium text-gray-700">
+                              {t.hostDashboard.settings.logoLabel}
+                            </label>
+                            <input
+                              type="text"
+                              value={settingsForm.logo}
+                              onChange={(e) =>
+                                setSettingsForm((prev) => ({ ...prev, logo: e.target.value }))
+                              }
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                              placeholder={t.hostDashboard.settings.logoPlaceholder}
+                            />
+                            <input
+                              ref={logoInputRef}
+                              type="file"
+                              accept="image/*"
+                              onChange={handleLogoUpload}
+                              className="hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => logoInputRef.current?.click()}
+                              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
+                              disabled={logoUploading}
+                            >
+                              {logoUploading ? t.hostDashboard.settings.uploading : t.hostDashboard.settings.uploadImage}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            {t.hostDashboard.settings.welcomeMessageLabel}
+                          </label>
+                          <textarea
+                            value={settingsForm.welcomeMessage}
+                            onChange={(e) =>
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                welcomeMessage: e.target.value,
+                              }))
+                            }
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                            rows={3}
+                            maxLength={200}
+                            placeholder={t.hostDashboard.settings.welcomeMessageLabel}
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <label className="flex items-center gap-3 p-4 border rounded-lg">
+                            <input
+                              type="checkbox"
+                              checked={settingsForm.allowGroupChat}
+                              onChange={(e) =>
+                                setSettingsForm((prev) => ({
+                                  ...prev,
+                                  allowGroupChat: e.target.checked,
+                                }))
+                              }
+                              className="h-4 w-4 text-green-600 border-gray-300 rounded"
+                            />
+                            <span className="text-sm text-gray-700">{t.hostDashboard.settings.enableGroupChat}</span>
+                          </label>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                              {t.hostDashboard.settings.maxGroupSize}
+                            </label>
+                            <input
+                              type="number"
+                              min={2}
+                              max={500}
+                              value={settingsForm.maxGroupSize}
+                              onChange={(e) =>
+                                setSettingsForm((prev) => ({
+                                  ...prev,
+                                  maxGroupSize: Number(e.target.value),
+                                }))
+                              }
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900"
+                              disabled={!settingsForm.allowGroupChat}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                          <button
+                            type="submit"
+                            className="px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors disabled:opacity-50"
+                            disabled={settingsLoading}
+                          >
+                            {settingsLoading ? t.hostDashboard.settings.saving : t.hostDashboard.settings.save}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSettingsForm((prev) => ({
+                                ...prev,
+                                primaryColor: '#3b82f6',
+                                secondaryColor: '#10b981',
+                                welcomeMessage: '',
+                                logo: '',
+                                allowGroupChat: true,
+                                maxGroupSize: 100,
+                              }))
+                            }
+                            className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                            disabled={settingsLoading}
+                          >
+                            {t.hostDashboard.settings.resetDefaults}
+                          </button>
+                        </div>
+                      </form>
                     </div>
                   )}
                 </div>
@@ -452,10 +853,10 @@ export default function HostDashboardPage() {
                   />
                 </svg>
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  No workspace selected
+                  {t.hostDashboard.noWorkspace.title}
                 </h3>
                 <p className="text-gray-600">
-                  Create a workspace to get started
+                  {t.hostDashboard.noWorkspace.subtitle}
                 </p>
               </div>
             )}
@@ -469,7 +870,7 @@ export default function HostDashboardPage() {
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-2xl font-bold text-gray-900">
-                Create New Workspace
+                {t.hostDashboard.modal.title}
               </h2>
               <button
                 type="button"
@@ -505,19 +906,19 @@ export default function HostDashboardPage() {
             <form onSubmit={handleCreateWorkspace} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Workspace Name
+                  {t.hostDashboard.modal.workspaceNameLabel}
                 </label>
                 <input
                   type="text"
                   value={newWorkspaceName}
                   onChange={(e) => setNewWorkspaceName(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
-                  placeholder="My Awesome Community"
+                  placeholder={t.hostDashboard.modal.workspaceNamePlaceholder}
                   disabled={createLoading}
                   autoFocus
                 />
                 <p className="mt-2 text-xs text-gray-500">
-                  Choose a unique name for your chat community
+                  {t.hostDashboard.modal.workspaceNameHelper}
                 </p>
               </div>
 
@@ -532,7 +933,7 @@ export default function HostDashboardPage() {
                   className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
                   disabled={createLoading}
                 >
-                  Cancel
+                  {t.hostDashboard.modal.cancel}
                 </button>
                 <button
                   type="submit"
@@ -542,10 +943,10 @@ export default function HostDashboardPage() {
                   {createLoading ? (
                     <div className="flex items-center justify-center gap-2">
                       <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                      <span>Creating...</span>
+                      <span>{t.hostDashboard.modal.creating}</span>
                     </div>
                   ) : (
-                    'Create Workspace'
+                    t.hostDashboard.modal.create
                   )}
                 </button>
               </div>

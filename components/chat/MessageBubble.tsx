@@ -30,9 +30,14 @@ export default function MessageBubble({ message, isOwn }: MessageBubbleProps) {
       <div
         className={`max-w-[70%] rounded-2xl px-4 py-2 ${
           isOwn
-            ? 'bg-green-500 text-white rounded-br-sm'
+            ? 'rounded-br-sm'
             : 'bg-gray-100 text-gray-900 rounded-bl-sm'
         }`}
+        style={
+          isOwn
+            ? { backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }
+            : undefined
+        }
       >
         {!isOwn && message.senderName && (
           <div className="text-xs font-semibold mb-1 text-gray-600">
@@ -54,8 +59,16 @@ export default function MessageBubble({ message, isOwn }: MessageBubbleProps) {
             target="_blank"
             rel="noopener noreferrer"
             className={`flex items-center gap-2 p-2 rounded-lg mb-1 ${
-              isOwn ? 'bg-green-600' : 'bg-gray-200'
+              isOwn ? '' : 'bg-gray-200'
             }`}
+            style={
+              isOwn
+                ? {
+                    backgroundColor: 'var(--ws-secondary)',
+                    color: 'var(--ws-secondary-text)',
+                  }
+                : undefined
+            }
           >
             <svg
               className="w-5 h-5"
@@ -79,9 +92,12 @@ export default function MessageBubble({ message, isOwn }: MessageBubbleProps) {
         )}
 
         <div
-          className={`text-xs mt-1 ${
-            isOwn ? 'text-green-100' : 'text-gray-500'
-          }`}
+          className="text-xs mt-1"
+          style={
+            isOwn
+              ? { color: 'var(--ws-primary-text)', opacity: 0.8 }
+              : { color: '#6b7280' }
+          }
         >
           {formatTime(message.createdAt)}
         </div>

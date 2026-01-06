@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { Workspace } from '@/lib/types';
+import { getTranslations } from '@/lib/i18n';
+import { useLang } from '@/hooks/useLang';
 
 interface WorkspaceSwitcherProps {
   workspaces: Workspace[];
@@ -23,6 +25,8 @@ export default function WorkspaceSwitcher({
 
   const [showJoinForm, setShowJoinForm] = useState(false);
   const [inviteCode, setInviteCode] = useState('');
+  const lang = useLang();
+  const t = getTranslations(lang);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,7 +42,7 @@ export default function WorkspaceSwitcher({
       <div className="bg-white rounded-2xl max-w-md w-full max-h-[80vh] overflow-hidden shadow-2xl">
         {/* Header */}
         <div className="p-4 border-b flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">Workspaces</h2>
+          <h2 className="text-xl font-semibold text-gray-900">{t.workspaceSwitcher.title}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -70,9 +74,19 @@ export default function WorkspaceSwitcher({
                 onSelectWorkspace(workspace);
                 onClose();
               }}
-              className={`w-full p-4 rounded-xl flex items-center gap-3 hover:bg-gray-50 transition-colors mb-2 ${
-                currentWorkspace?.id === workspace.id ? 'bg-green-50 ring-2 ring-green-500' : ''
+              className={`w-full p-4 rounded-xl flex items-center gap-3 transition-colors mb-2 border-2 ${
+                currentWorkspace?.id === workspace.id
+                  ? ''
+                  : 'hover:bg-gray-50 border-transparent'
               }`}
+              style={
+                currentWorkspace?.id === workspace.id
+                  ? {
+                      backgroundColor: 'var(--ws-primary-soft)',
+                      borderColor: 'var(--ws-primary)',
+                    }
+                  : undefined
+              }
             >
               <div
                 className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
@@ -96,9 +110,10 @@ export default function WorkspaceSwitcher({
               </div>
               {currentWorkspace?.id === workspace.id && (
                 <svg
-                  className="w-6 h-6 text-green-500"
+                  className="w-6 h-6"
                   fill="currentColor"
                   viewBox="0 0 20 20"
+                  style={{ color: 'var(--ws-primary)' }}
                 >
                   <path
                     fillRule="evenodd"
@@ -112,8 +127,8 @@ export default function WorkspaceSwitcher({
 
           {workspaces.length === 0 && !showJoinForm && (
             <div className="p-8 text-center text-gray-500">
-              <p className="text-sm">No workspaces yet</p>
-              <p className="text-xs mt-1">Join a workspace to start chatting</p>
+              <p className="text-sm">{t.workspaceSwitcher.emptyTitle}</p>
+              <p className="text-xs mt-1">{t.workspaceSwitcher.emptySubtitle}</p>
             </div>
           )}
         </div>
@@ -122,7 +137,7 @@ export default function WorkspaceSwitcher({
         {showJoinForm ? (
           <form onSubmit={handleJoin} className="p-4 border-t">
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Enter Invite Code
+              {t.workspaceSwitcher.inviteCodeLabel}
             </label>
             <div className="flex gap-2">
               <input
@@ -130,15 +145,16 @@ export default function WorkspaceSwitcher({
                 value={inviteCode}
                 onChange={(e) => setInviteCode(e.target.value.toUpperCase())}
                 placeholder="ABC123XY"
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent uppercase text-gray-900 placeholder-gray-400"
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[var(--ws-primary)] focus:border-transparent uppercase text-gray-900 placeholder-gray-400"
                 maxLength={8}
                 required
               />
               <button
                 type="submit"
-                className="px-4 py-2 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
+                className="px-4 py-2 rounded-lg font-medium hover:opacity-90"
+                style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
               >
-                Join
+                {t.workspaceSwitcher.join}
               </button>
             </div>
             <button
@@ -146,7 +162,7 @@ export default function WorkspaceSwitcher({
               onClick={() => setShowJoinForm(false)}
               className="mt-2 text-sm text-gray-500 hover:text-gray-700"
             >
-              Cancel
+              {t.workspaceSwitcher.cancel}
             </button>
           </form>
         ) : (
@@ -154,9 +170,10 @@ export default function WorkspaceSwitcher({
             <button
               type="button"
               onClick={() => setShowJoinForm(true)}
-              className="w-full py-2 px-4 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+              className="w-full py-2 px-4 rounded-lg font-medium transition-colors hover:opacity-90"
+              style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
             >
-              + Join Workspace
+              {t.workspaceSwitcher.joinWorkspace}
             </button>
           </div>
         )}

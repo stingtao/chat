@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
+import LangRedirector from "@/components/i18n/LangRedirector";
 
 export const metadata: Metadata = {
   title: "chat - Create Your Own Branded Chat Community",
@@ -28,6 +29,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased flex flex-col min-h-screen">
+        <LangRedirector />
         <Navbar />
         <main className="flex-1">
           {children}

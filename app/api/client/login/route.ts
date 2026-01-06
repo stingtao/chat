@@ -25,6 +25,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Check if OAuth user trying password login
+    if (!user.password && user.authProvider !== 'email') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `This account uses ${user.authProvider} login. Please use the ${user.authProvider} button.`,
+        },
+        { status: 401 }
+      );
+    }
+
     // Verify password
     const isValid = await verifyPassword(password, user.password);
     if (!isValid) {

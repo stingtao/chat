@@ -1,7 +1,14 @@
+'use client';
+
 import Link from "next/link";
+import { getTranslations } from "@/lib/i18n";
+import { useLang, useLangHref } from "@/hooks/useLang";
 
 export default function Footer() {
   const currentYear = new Date().getFullYear();
+  const lang = useLang();
+  const t = getTranslations(lang);
+  const withLang = useLangHref();
 
   return (
     <footer className="bg-gray-50 border-t border-gray-200">
@@ -9,36 +16,36 @@ export default function Footer() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           {/* Brand */}
           <div className="col-span-1 md:col-span-2">
-            <Link href="/" className="flex items-center space-x-2 mb-4">
+            <Link href={withLang("/")} className="flex items-center space-x-2 mb-4">
               <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-lg flex items-center justify-center">
                 <span className="text-white font-bold text-lg">C</span>
               </div>
               <span className="text-2xl font-bold text-gray-900">chat</span>
             </Link>
             <p className="text-gray-600 mb-4 max-w-sm">
-              Create your own branded chat community. Connect with your audience through real-time messaging, group chats, and customizable workspaces.
+              {t.footer.description}
             </p>
           </div>
 
           {/* Product */}
           <div>
             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-4">
-              Product
+              {t.footer.product}
             </h3>
             <ul className="space-y-3">
               <li>
-                <Link href="/#features" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  Features
+                <Link href={withLang("/#features")} className="text-gray-600 hover:text-gray-900 transition-colors">
+                  {t.footer.features}
                 </Link>
               </li>
               <li>
-                <Link href="/host/login" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  For Hosts
+                <Link href={withLang("/host/login")} className="text-gray-600 hover:text-gray-900 transition-colors">
+                  {t.footer.forHosts}
                 </Link>
               </li>
               <li>
-                <Link href="/client/login" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  For Users
+                <Link href={withLang("/client/login")} className="text-gray-600 hover:text-gray-900 transition-colors">
+                  {t.footer.forUsers}
                 </Link>
               </li>
             </ul>
@@ -47,22 +54,22 @@ export default function Footer() {
           {/* Company */}
           <div>
             <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-4">
-              Company
+              {t.footer.company}
             </h3>
             <ul className="space-y-3">
               <li>
                 <a href="#" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  About
+                  {t.footer.about}
                 </a>
               </li>
               <li>
                 <a href="#" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  Privacy
+                  {t.footer.privacy}
                 </a>
               </li>
               <li>
                 <a href="#" className="text-gray-600 hover:text-gray-900 transition-colors">
-                  Terms
+                  {t.footer.terms}
                 </a>
               </li>
             </ul>
@@ -71,7 +78,7 @@ export default function Footer() {
 
         <div className="border-t border-gray-200 mt-8 pt-8 text-center">
           <p className="text-gray-500 text-sm">
-            © {currentYear} chat. All rights reserved.
+            {t.footer.copyright(currentYear)}
           </p>
         </div>
       </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/stores/chatStore';
 import { api } from '@/lib/api';
@@ -12,7 +12,10 @@ import FriendRequests from '@/components/chat/FriendRequests';
 import CreateGroup from '@/components/chat/CreateGroup';
 import { useMessagePolling } from '@/hooks/useMessagePolling';
 import { useStatusUpdate } from '@/hooks/useStatusUpdate';
-import { WorkspaceMember } from '@/lib/types';
+import { Friendship, WorkspaceMember } from '@/lib/types';
+import { getContrastColor, hexToRgba, normalizeHexColor } from '@/lib/utils';
+import { getTranslations } from '@/lib/i18n';
+import { useLang, useLangHref } from '@/hooks/useLang';
 
 export default function ChatPage() {
   const router = useRouter();
@@ -49,6 +52,50 @@ export default function ChatPage() {
   const [currentMemberTag, setCurrentMemberTag] = useState<string>('');
   const [showFriendRequests, setShowFriendRequests] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [pendingFriendRequests, setPendingFriendRequests] = useState<Friendship[]>([]);
+  const [hasUnseenFriendRequests, setHasUnseenFriendRequests] = useState(false);
+  const seenFriendRequestIdsRef = useRef<Record<string, Set<string>>>({});
+  const lastWorkspaceIdRef = useRef<string | null>(null);
+  const lang = useLang();
+  const t = getTranslations(lang);
+  const withLang = useLangHref();
+
+  const workspaceSettings = currentWorkspace?.settings;
+  const primaryColor = normalizeHexColor(workspaceSettings?.primaryColor, '#3b82f6');
+  const secondaryColor = normalizeHexColor(workspaceSettings?.secondaryColor, '#10b981');
+  const themeStyle = {
+    '--ws-primary': primaryColor,
+    '--ws-secondary': secondaryColor,
+    '--ws-primary-soft': hexToRgba(primaryColor, 0.12),
+    '--ws-secondary-soft': hexToRgba(secondaryColor, 0.12),
+    '--ws-primary-text': getContrastColor(primaryColor),
+    '--ws-secondary-text': getContrastColor(secondaryColor),
+  } as CSSProperties;
+  const welcomeMessage = workspaceSettings?.welcomeMessage?.trim();
+  const allowGroupChat = workspaceSettings?.allowGroupChat ?? true;
+  const maxGroupSize = workspaceSettings?.maxGroupSize ?? 100;
+  const getSeenRequestIds = (workspaceId: string) => {
+    if (!seenFriendRequestIdsRef.current[workspaceId]) {
+      seenFriendRequestIdsRef.current[workspaceId] = new Set<string>();
+    }
+    return seenFriendRequestIdsRef.current[workspaceId];
+  };
+
+  const refreshFriendRequests = async (workspaceId: string) => {
+    if (!user) return;
+    const response = await api.getFriendRequests(workspaceId);
+    if (response.success && response.data) {
+      const requests = response.data as Friendship[];
+      setPendingFriendRequests(requests);
+
+      const incomingRequests = requests.filter(
+        (request) => request.receiverId === user.id && request.status === 'pending'
+      );
+      const seenSet = getSeenRequestIds(workspaceId);
+      const hasUnseen = incomingRequests.some((request) => !seenSet.has(request.id));
+      setHasUnseenFriendRequests(hasUnseen);
+    }
+  };
 
   // Enable message polling for real-time updates
   useMessagePolling(3000);
@@ -63,7 +110,7 @@ export default function ChatPage() {
     const userType = localStorage.getItem('userType');
 
     if (!storedToken || !storedUser || userType !== 'client') {
-      router.push('/client/login');
+      router.push(withLang('/client/login'));
       return;
     }
 
@@ -124,6 +171,26 @@ export default function ChatPage() {
 
     loadData();
   }, [currentWorkspace, token]);
+
+  useEffect(() => {
+    if (!currentWorkspace || !token || !user) return;
+
+    refreshFriendRequests(currentWorkspace.id);
+    const interval = setInterval(() => {
+      refreshFriendRequests(currentWorkspace.id);
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [currentWorkspace, token, user]);
+
+  useEffect(() => {
+    if (!currentWorkspace?.id) return;
+    if (lastWorkspaceIdRef.current && lastWorkspaceIdRef.current !== currentWorkspace.id) {
+      setPendingFriendRequests([]);
+      setHasUnseenFriendRequests(false);
+    }
+    lastWorkspaceIdRef.current = currentWorkspace.id;
+  }, [currentWorkspace?.id]);
 
   // Load messages when conversation changes
   useEffect(() => {
@@ -193,7 +260,7 @@ export default function ChatPage() {
         addMessage(response.data);
       }
     } else {
-      alert('Failed to upload file: ' + (uploadResponse.error || 'Unknown error'));
+      alert(t.chat.fileUploadFailed(uploadResponse.error || t.chat.unknownError));
     }
 
     setUploadingFile(false);
@@ -207,9 +274,9 @@ export default function ChatPage() {
       setWorkspaces(newWorkspaces);
       setCurrentWorkspace(response.data);
       toggleWorkspaceSwitcher(); // Close the modal
-      alert(`Successfully joined workspace: ${response.data.name}`);
+      alert(t.chat.joinSuccess(response.data.name));
     } else {
-      alert(`Failed to join workspace: ${response.error || 'Unknown error'}`);
+      alert(t.chat.joinFailure(response.error || t.chat.unknownError));
     }
   };
 
@@ -220,7 +287,8 @@ export default function ChatPage() {
     const response = await api.sendFriendRequest(currentWorkspace.id, userId);
     if (response.success) {
       toggleFriendList();
-      alert('Friend request sent successfully!');
+      alert(t.chat.friendRequestSent);
+      refreshFriendRequests(currentWorkspace.id);
       // Reload friends
       const friendsResponse = await api.getFriends(currentWorkspace.id);
       if (friendsResponse.success && friendsResponse.data) {
@@ -228,8 +296,20 @@ export default function ChatPage() {
       }
     } else {
       // Show the specific error message from the API
-      alert(response.error || 'Failed to send friend request');
+      alert(t.chat.friendRequestFailed(response.error || t.chat.unknownError));
     }
+  };
+
+  const handleOpenFriendRequests = () => {
+    if (currentWorkspace && user) {
+      const incomingIds = pendingFriendRequests
+        .filter((request) => request.receiverId === user.id)
+        .map((request) => request.id);
+      const seenSet = getSeenRequestIds(currentWorkspace.id);
+      incomingIds.forEach((id) => seenSet.add(id));
+      setHasUnseenFriendRequests(false);
+    }
+    setShowFriendRequests(true);
   };
 
   // Create group
@@ -248,6 +328,8 @@ export default function ChatPage() {
       if (groupsResponse.success && groupsResponse.data) {
         setGroups(groupsResponse.data);
       }
+    } else {
+      alert(t.chat.createGroupFailed(response.error || t.chat.unknownError));
     }
   };
 
@@ -257,7 +339,7 @@ export default function ChatPage() {
     localStorage.removeItem('user');
     localStorage.removeItem('userType');
     reset();
-    router.push('/client/login');
+    router.push(withLang('/client/login'));
   };
 
   // Get current conversation details
@@ -267,24 +349,28 @@ export default function ChatPage() {
     if (currentConversationType === 'direct') {
       const friendship = friends.find((f) => f.friend?.id === currentConversationId);
       return {
-        name: friendship?.friend?.username || 'Unknown',
+        name: friendship?.friend?.username || t.common.unknown,
         avatar: friendship?.friend?.avatar,
       };
     } else {
       const group = groups.find((g) => g.id === currentConversationId);
       return {
-        name: group?.name || 'Unknown Group',
+        name: group?.name || t.common.unknownGroup,
         avatar: group?.avatar,
       };
     }
   };
 
   const conversation = getCurrentConversation();
+  const hasActiveConversation = Boolean(conversation && user);
 
   if (loading && !currentWorkspace) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-100" style={themeStyle}>
+        <div
+          className="animate-spin rounded-full h-12 w-12 border-b-2"
+          style={{ borderBottomColor: 'var(--ws-primary)' }}
+        ></div>
       </div>
     );
   }
@@ -293,11 +379,11 @@ export default function ChatPage() {
     console.log('[No Workspace Screen] Rendering, showWorkspaceSwitcher:', showWorkspaceSwitcher);
     return (
       <>
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+        <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4" style={themeStyle}>
           <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">No Workspace</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">{t.chat.noWorkspaceTitle}</h2>
             <p className="text-gray-600 mb-6">
-              You need to join a workspace to start chatting
+              {t.chat.noWorkspaceSubtitle}
             </p>
             <button
               type="button"
@@ -307,9 +393,10 @@ export default function ChatPage() {
                 toggleWorkspaceSwitcher();
                 console.log('After toggle called');
               }}
-              className="w-full py-2 px-4 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
+              className="w-full py-2 px-4 rounded-lg font-medium transition-colors hover:opacity-90"
+              style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
             >
-              Join Workspace
+              {t.chat.joinWorkspace}
             </button>
           </div>
         </div>
@@ -329,9 +416,12 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-100">
+    <div className="h-screen flex flex-col bg-gray-100" style={themeStyle}>
       {/* Top Bar */}
-      <div className="bg-green-600 text-white p-4 flex items-center justify-between shadow-lg">
+      <div
+        className="p-4 flex items-center justify-between shadow-lg"
+        style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
+      >
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -340,22 +430,31 @@ export default function ChatPage() {
               console.log('Current showWorkspaceSwitcher:', showWorkspaceSwitcher);
               toggleWorkspaceSwitcher();
             }}
-            className="w-10 h-10 rounded-xl bg-white bg-opacity-20 flex items-center justify-center font-bold hover:bg-opacity-30 transition-colors"
+            className="w-10 h-10 rounded-xl flex items-center justify-center font-bold transition-colors overflow-hidden"
             style={{
-              backgroundColor: currentWorkspace.settings?.primaryColor || '#3b82f6',
+              backgroundColor: 'var(--ws-secondary)',
+              color: 'var(--ws-secondary-text)',
             }}
           >
-            {currentWorkspace.name.substring(0, 2).toUpperCase()}
+            {currentWorkspace.settings?.logo ? (
+              <img
+                src={currentWorkspace.settings.logo}
+                alt={currentWorkspace.name}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              currentWorkspace.name.substring(0, 2).toUpperCase()
+            )}
           </button>
           <div>
             <h1 className="font-semibold">{currentWorkspace.name}</h1>
-            <p className="text-xs text-green-100">
+            <p className="text-xs opacity-80">
               {user?.username}
               {currentMemberTag && <span className="opacity-75">#{currentMemberTag}</span>}
               {' • '}{user?.email}
             </p>
-            <p className="text-xs text-green-100">
-              {friends.length} friends • {groups.length} groups
+            <p className="text-xs opacity-80">
+              {t.chat.stats(friends.length, groups.length)}
             </p>
           </div>
         </div>
@@ -363,9 +462,12 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setShowCreateGroup(true)}
-            className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors"
-            title="Create Group"
+            onClick={() => allowGroupChat && setShowCreateGroup(true)}
+            className={`p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors ${
+              allowGroupChat ? '' : 'opacity-50 cursor-not-allowed'
+            }`}
+            title={allowGroupChat ? t.chat.createGroup : t.chat.createGroupDisabled}
+            disabled={!allowGroupChat}
           >
             <svg
               className="w-6 h-6"
@@ -383,10 +485,13 @@ export default function ChatPage() {
           </button>
           <button
             type="button"
-            onClick={() => setShowFriendRequests(true)}
+            onClick={handleOpenFriendRequests}
             className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors relative"
-            title="Friend Requests"
+            title={t.chat.friendRequests}
           >
+            {hasUnseenFriendRequests && (
+              <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-red-500 ring-2 ring-white"></span>
+            )}
             <svg
               className="w-6 h-6"
               fill="none"
@@ -405,7 +510,7 @@ export default function ChatPage() {
             type="button"
             onClick={toggleFriendList}
             className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors"
-            title="Add Friends"
+            title={t.chat.addFriends}
           >
             <svg
               className="w-6 h-6"
@@ -425,7 +530,7 @@ export default function ChatPage() {
             type="button"
             onClick={handleLogout}
             className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors"
-            title="Logout"
+            title={t.chat.logout}
           >
             <svg
               className="w-6 h-6"
@@ -447,24 +552,44 @@ export default function ChatPage() {
       {/* Main Chat Area */}
       <div className="flex-1 flex overflow-hidden">
         {/* Conversation List */}
-        <div className="w-full md:w-80 lg:w-96 flex-shrink-0">
-          <ConversationList
-            friends={friends}
-            groups={groups}
-            currentConversationId={currentConversationId}
-            currentConversationType={currentConversationType}
-            onSelectConversation={setCurrentConversation}
-          />
+        <div
+          className={`w-full md:w-80 lg:w-96 flex-shrink-0 flex flex-col ${
+            hasActiveConversation ? 'hidden md:flex' : 'flex'
+          }`}
+        >
+          {welcomeMessage && (
+            <div
+              className="mx-4 mt-4 mb-2 rounded-lg px-3 py-2 text-sm"
+              style={{
+                backgroundColor: 'var(--ws-secondary-soft)',
+                color: 'var(--ws-secondary)',
+              }}
+            >
+              {welcomeMessage}
+            </div>
+          )}
+          <div className="flex-1 min-h-0">
+            <ConversationList
+              friends={friends}
+              groups={groups}
+              currentConversationId={currentConversationId}
+              currentConversationType={currentConversationType}
+              onSelectConversation={setCurrentConversation}
+            />
+          </div>
         </div>
 
         {/* Chat Window */}
-        <div className="flex-1 hidden md:block">
+        <div
+          className={`flex-1 min-h-0 ${hasActiveConversation ? 'flex' : 'hidden md:flex'}`}
+        >
           {conversation && user ? (
             <ChatWindow
               conversationName={conversation.name}
               conversationAvatar={conversation.avatar}
               messages={messages}
               currentUserId={user.id}
+              onBack={() => setCurrentConversation(null, null)}
               onSendMessage={handleSendMessage}
               onFileUpload={handleFileUpload}
               loading={sendingMessage}
@@ -486,8 +611,8 @@ export default function ChatPage() {
                     d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
                   />
                 </svg>
-                <p className="text-lg font-medium">Select a conversation</p>
-                <p className="text-sm mt-1">Choose a friend or group to start chatting</p>
+                <p className="text-lg font-medium">{t.chat.selectConversationTitle}</p>
+                <p className="text-sm mt-1">{t.chat.selectConversationSubtitle}</p>
               </div>
             </div>
           )}
@@ -515,6 +640,14 @@ export default function ChatPage() {
       {showFriendList && (
         <FriendList
           members={workspaceMembers}
+          currentUserId={user?.id || ''}
+          friendIds={friends.map((friend) => friend.friend?.id).filter(Boolean) as string[]}
+          pendingOutgoingIds={pendingFriendRequests
+            .filter((request) => request.senderId === user?.id)
+            .map((request) => request.receiverId)}
+          pendingIncomingIds={pendingFriendRequests
+            .filter((request) => request.receiverId === user?.id)
+            .map((request) => request.senderId)}
           onSendFriendRequest={handleSendFriendRequest}
           onClose={toggleFriendList}
         />
@@ -531,6 +664,7 @@ export default function ChatPage() {
             if (friendsResponse.success && friendsResponse.data) {
               setFriends(friendsResponse.data);
             }
+            refreshFriendRequests(currentWorkspace.id);
           }}
         />
       )}
@@ -538,6 +672,7 @@ export default function ChatPage() {
       {showCreateGroup && (
         <CreateGroup
           friends={friends}
+          maxGroupSize={maxGroupSize}
           onCreateGroup={handleCreateGroup}
           onClose={() => setShowCreateGroup(false)}
         />

@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import { getTranslations } from '@/lib/i18n';
+import { useLang } from '@/hooks/useLang';
 
 interface MessageInputProps {
   onSend: (content: string) => void;
@@ -13,12 +15,15 @@ interface MessageInputProps {
 export default function MessageInput({
   onSend,
   onFileUpload,
-  placeholder = 'Type a message...',
+  placeholder,
   disabled = false,
   uploading = false,
 }: MessageInputProps) {
   const [message, setMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const lang = useLang();
+  const t = getTranslations(lang);
+  const resolvedPlaceholder = placeholder || t.messageInput.placeholder;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,6 +51,8 @@ export default function MessageInput({
     }
   };
 
+  const isSendDisabled = !message.trim() || disabled;
+
   return (
     <form onSubmit={handleSubmit} className="border-t bg-white p-4">
       <div className="flex items-center gap-2">
@@ -61,7 +68,7 @@ export default function MessageInput({
           onClick={() => fileInputRef.current?.click()}
           className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100 transition-colors disabled:opacity-50"
           disabled={disabled || uploading}
-          title="Attach file"
+          title={t.messageInput.attachFile}
         >
           {uploading ? (
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-gray-500"></div>
@@ -87,15 +94,20 @@ export default function MessageInput({
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           disabled={disabled}
-          className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent disabled:bg-gray-100 text-gray-900 placeholder-gray-400"
+          className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--ws-primary)] focus:border-transparent disabled:bg-gray-100 text-gray-900 placeholder-gray-400"
         />
 
         <button
           type="submit"
-          disabled={!message.trim() || disabled}
-          className="p-2 bg-green-500 text-white rounded-full hover:bg-green-600 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+          disabled={isSendDisabled}
+          className="p-2 rounded-full disabled:cursor-not-allowed transition-colors hover:opacity-90"
+          style={
+            isSendDisabled
+              ? { backgroundColor: '#d1d5db', color: '#6b7280' }
+              : { backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }
+          }
         >
           <svg
             className="w-6 h-6"

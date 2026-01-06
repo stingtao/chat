@@ -3,27 +3,40 @@
 import { useState } from 'react';
 import { Friendship } from '@/lib/types';
 import { getInitials } from '@/lib/utils';
+import { getTranslations } from '@/lib/i18n';
+import { useLang } from '@/hooks/useLang';
 
 interface CreateGroupProps {
   friends: Friendship[];
+  maxGroupSize?: number;
   onCreateGroup: (name: string, memberIds: string[]) => void;
   onClose: () => void;
 }
 
 export default function CreateGroup({
   friends,
+  maxGroupSize,
   onCreateGroup,
   onClose,
 }: CreateGroupProps) {
   const [groupName, setGroupName] = useState('');
   const [selectedFriends, setSelectedFriends] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const lang = useLang();
+  const t = getTranslations(lang);
+
+  const resolvedMaxGroupSize =
+    typeof maxGroupSize === 'number' && maxGroupSize > 0 ? maxGroupSize : 100;
+  const maxSelectableFriends = Math.max(resolvedMaxGroupSize - 1, 0);
+  const isCreateDisabled = !groupName.trim() || selectedFriends.length === 0;
 
   const handleToggleFriend = (friendId: string) => {
     if (selectedFriends.includes(friendId)) {
       setSelectedFriends(selectedFriends.filter(id => id !== friendId));
-    } else {
+    } else if (selectedFriends.length < maxSelectableFriends) {
       setSelectedFriends([...selectedFriends, friendId]);
+    } else {
+      return;
     }
   };
 
@@ -43,7 +56,7 @@ export default function CreateGroup({
       <div className="bg-white rounded-2xl max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col">
         {/* Header */}
         <div className="p-4 border-b flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">Create Group</h2>
+          <h2 className="text-xl font-semibold text-gray-900">{t.createGroup.title}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -68,16 +81,19 @@ export default function CreateGroup({
         {/* Group Name Input */}
         <div className="p-4 border-b">
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Group Name
+            {t.createGroup.groupNameLabel}
           </label>
           <input
             type="text"
             value={groupName}
             onChange={(e) => setGroupName(e.target.value)}
-            placeholder="Enter group name..."
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-400"
+            placeholder={t.createGroup.groupNamePlaceholder}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--ws-primary)] text-gray-900 placeholder-gray-400"
             maxLength={50}
           />
+          <p className="text-xs text-gray-500 mt-2">
+            {t.createGroup.maxMembers(resolvedMaxGroupSize)}
+          </p>
         </div>
 
         {/* Search */}
@@ -86,15 +102,18 @@ export default function CreateGroup({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search friends..."
-            className="w-full px-4 py-2 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-500"
+            placeholder={t.createGroup.searchPlaceholder}
+            className="w-full px-4 py-2 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--ws-primary)] text-gray-900 placeholder-gray-500"
           />
         </div>
 
         {/* Selected Count */}
         {selectedFriends.length > 0 && (
-          <div className="px-4 py-2 bg-green-50 text-green-700 text-sm">
-            {selectedFriends.length} friend{selectedFriends.length > 1 ? 's' : ''} selected
+          <div
+            className="px-4 py-2 text-sm"
+            style={{ backgroundColor: 'var(--ws-primary-soft)', color: 'var(--ws-primary)' }}
+          >
+            {t.createGroup.selectedCount(selectedFriends.length)}
           </div>
         )}
 
@@ -116,7 +135,7 @@ export default function CreateGroup({
                 />
               </svg>
               <p className="text-sm">
-                {searchQuery ? 'No friends found' : 'No friends to add'}
+                {searchQuery ? t.createGroup.noFriendsFound : t.createGroup.noFriendsToAdd}
               </p>
             </div>
           ) : (
@@ -126,17 +145,24 @@ export default function CreateGroup({
 
               const isSelected = selectedFriends.includes(friend.id);
 
-              return (
-                <button
-                  type="button"
-                  key={friendship.id}
-                  onClick={() => handleToggleFriend(friend.id)}
-                  className={`w-full p-4 rounded-xl flex items-center gap-3 transition-colors mb-2 ${
-                    isSelected
-                      ? 'bg-green-50 border-2 border-green-500'
-                      : 'hover:bg-gray-50 border-2 border-transparent'
-                  }`}
-                >
+                return (
+                  <button
+                    type="button"
+                    key={friendship.id}
+                    onClick={() => handleToggleFriend(friend.id)}
+                    className={`w-full p-4 rounded-xl flex items-center gap-3 transition-colors mb-2 ${
+                      isSelected ? 'border-2' : 'hover:bg-gray-50 border-2 border-transparent'
+                    }`}
+                    style={
+                      isSelected
+                        ? {
+                            backgroundColor: 'var(--ws-primary-soft)',
+                            borderColor: 'var(--ws-primary)',
+                          }
+                        : undefined
+                    }
+                    disabled={!isSelected && selectedFriends.length >= maxSelectableFriends}
+                  >
                   <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
                     {friend.avatar ? (
                       <img
@@ -156,9 +182,10 @@ export default function CreateGroup({
                   </div>
                   {isSelected && (
                     <svg
-                      className="w-6 h-6 text-green-500"
+                      className="w-6 h-6"
                       fill="currentColor"
                       viewBox="0 0 20 20"
+                      style={{ color: 'var(--ws-primary)' }}
                     >
                       <path
                         fillRule="evenodd"
@@ -180,15 +207,20 @@ export default function CreateGroup({
             onClick={onClose}
             className="flex-1 py-2 px-4 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t.createGroup.cancel}
           </button>
           <button
             type="button"
             onClick={handleCreate}
-            disabled={!groupName.trim() || selectedFriends.length === 0}
-            className="flex-1 py-2 px-4 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            disabled={isCreateDisabled}
+            className="flex-1 py-2 px-4 rounded-lg font-medium transition-colors hover:opacity-90 disabled:cursor-not-allowed"
+            style={
+              isCreateDisabled
+                ? { backgroundColor: '#d1d5db', color: '#6b7280' }
+                : { backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }
+            }
           >
-            Create Group
+            {t.createGroup.create}
           </button>
         </div>
       </div>

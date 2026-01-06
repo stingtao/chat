@@ -12,11 +12,21 @@ datasource db {
 model Host {
   id            String      @id @default(uuid())
   email         String      @unique
-  password      String
+  password      String?     // Optional for OAuth users
   name          String
+  avatar        String?     // Profile picture URL
+
+  // OAuth provider fields
+  googleId      String?     @unique
+  lineId        String?     @unique
+  authProvider  String      @default("email") // email, google, line, or comma-separated (e.g., "google,line")
+
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   workspaces    Workspace[]
+
+  @@index([googleId])
+  @@index([lineId])
 }
 
 // Each workspace is a separate chat platform
@@ -63,9 +73,15 @@ model WorkspaceSettings {
 model User {
   id                String            @id @default(uuid())
   email             String            @unique
-  password          String
+  password          String?           // Optional for OAuth users
   username          String
   avatar            String?
+
+  // OAuth provider fields
+  googleId          String?     @unique
+  lineId            String?     @unique
+  authProvider      String      @default("email") // email, google, line, or comma-separated (e.g., "google,line")
+
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
@@ -79,6 +95,8 @@ model User {
 
   @@index([email])
   @@index([username])
+  @@index([googleId])
+  @@index([lineId])
 }
 
 // Join table for users in workspaces

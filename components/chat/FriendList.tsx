@@ -1,24 +1,49 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { WorkspaceMember } from '@/lib/types';
 import { getInitials } from '@/lib/utils';
+import { getTranslations } from '@/lib/i18n';
+import { useLang } from '@/hooks/useLang';
 
 interface FriendListProps {
   members: WorkspaceMember[];
+  currentUserId: string;
+  friendIds: string[];
+  pendingOutgoingIds: string[];
+  pendingIncomingIds: string[];
   onSendFriendRequest: (userId: string) => void;
   onClose: () => void;
 }
 
 export default function FriendList({
   members,
+  currentUserId,
+  friendIds,
+  pendingOutgoingIds,
+  pendingIncomingIds,
   onSendFriendRequest,
   onClose,
 }: FriendListProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const lang = useLang();
+  const t = getTranslations(lang);
+
+  const friendIdSet = useMemo(() => new Set(friendIds), [friendIds]);
+  const pendingOutgoingSet = useMemo(
+    () => new Set(pendingOutgoingIds),
+    [pendingOutgoingIds]
+  );
+  const pendingIncomingSet = useMemo(
+    () => new Set(pendingIncomingIds),
+    [pendingIncomingIds]
+  );
 
   const filteredMembers = members.filter((member) => {
     if (!member.user) return false;
+    if (member.user.id === currentUserId) return false;
+    if (friendIdSet.has(member.user.id)) return false;
+    if (pendingIncomingSet.has(member.user.id)) return false;
 
     const query = searchQuery.toLowerCase();
     const username = member.user.username.toLowerCase();
@@ -36,7 +61,7 @@ export default function FriendList({
       <div className="bg-white rounded-2xl max-w-md w-full max-h-[80vh] overflow-hidden">
         {/* Header */}
         <div className="p-4 border-b flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">Add Friends</h2>
+          <h2 className="text-xl font-semibold text-gray-900">{t.friendList.title}</h2>
           <button
             type="button"
             onClick={onClose}
@@ -64,8 +89,8 @@ export default function FriendList({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name or tag (e.g., username#1234)..."
-            className="w-full px-4 py-2 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-green-500 text-gray-900 placeholder-gray-500"
+            placeholder={t.friendList.searchPlaceholder}
+            className="w-full px-4 py-2 bg-gray-100 rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--ws-primary)] text-gray-900 placeholder-gray-500"
           />
         </div>
 
@@ -73,6 +98,7 @@ export default function FriendList({
         <div className="overflow-y-auto max-h-96 p-2">
           {filteredMembers.map((member) => {
             if (!member.user) return null;
+            const isPending = pendingOutgoingSet.has(member.user.id);
 
             return (
               <div
@@ -97,20 +123,30 @@ export default function FriendList({
                   </h3>
                   <p className="text-sm text-gray-500">{member.user.email}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onSendFriendRequest(member.user!.id)}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors"
-                >
-                  Add
-                </button>
+                {isPending ? (
+                  <span className="px-3 py-2 text-sm font-medium text-gray-500">
+                    {t.friendList.adding}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onSendFriendRequest(member.user!.id)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
+                    style={{
+                      backgroundColor: 'var(--ws-secondary)',
+                      color: 'var(--ws-secondary-text)',
+                    }}
+                  >
+                    {t.friendList.addFriend}
+                  </button>
+                )}
               </div>
             );
           })}
 
           {filteredMembers.length === 0 && (
             <div className="p-8 text-center text-gray-500">
-              <p className="text-sm">No members found</p>
+              <p className="text-sm">{t.friendList.empty}</p>
             </div>
           )}
         </div>

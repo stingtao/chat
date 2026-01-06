@@ -108,6 +108,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const workspace = await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      include: { settings: true },
+    });
+
+    if (!workspace) {
+      return NextResponse.json(
+        { success: false, error: 'Workspace not found' },
+        { status: 404 }
+      );
+    }
+
+    if (workspace.settings?.allowGroupChat === false) {
+      return NextResponse.json(
+        { success: false, error: 'Group chat is disabled for this workspace' },
+        { status: 403 }
+      );
+    }
+
+    const uniqueMemberIds = Array.from(
+      new Set((memberIds || []).filter((id: string) => id && id !== payload.userId))
+    );
+    const maxGroupSize = workspace.settings?.maxGroupSize ?? 100;
+    if (uniqueMemberIds.length + 1 > maxGroupSize) {
+      return NextResponse.json(
+        { success: false, error: `Group size exceeds limit (${maxGroupSize})` },
+        { status: 400 }
+      );
+    }
+
     // Create group
     const group = await prisma.group.create({
       data: {
@@ -122,7 +152,7 @@ export async function POST(request: NextRequest) {
               role: 'admin',
             },
             // Add other members
-            ...(memberIds || []).map((userId: string) => ({
+            ...uniqueMemberIds.map((userId: string) => ({
               userId,
               role: 'member',
             })),
