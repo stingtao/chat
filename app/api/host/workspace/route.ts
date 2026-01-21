@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken, generateInviteCode, generateSlug } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Get all workspaces for a host
 export async function GET(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -48,6 +51,7 @@ export async function GET(request: NextRequest) {
 // Create a new workspace
 export async function POST(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     console.log('Received token:', token ? 'exists' : 'missing');
 

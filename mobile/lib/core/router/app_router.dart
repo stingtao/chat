@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile/features/auth/presentation/auth_controller.dart';
 import 'package:mobile/features/auth/presentation/auth_screen.dart';
+import 'package:mobile/features/chat/presentation/chat_screen.dart';
+import 'package:mobile/features/chat/presentation/conversation_list_screen.dart';
+import 'package:mobile/features/friends/presentation/friends_screen.dart';
+import 'package:mobile/features/groups/presentation/create_group_screen.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'app_router.g.dart';
@@ -25,7 +29,7 @@ GoRouter appRouter(Ref ref) {
         if (authState.userType == 'host') {
           return '/host';
         } else {
-          return '/client';
+          return '/conversations';
         }
       }
 
@@ -41,8 +45,36 @@ GoRouter appRouter(Ref ref) {
         builder: (context, state) => const Scaffold(body: Center(child: Text('Host Dashboard'))),
       ),
       GoRoute(
-        path: '/client',
-        builder: (context, state) => const Scaffold(body: Center(child: Text('Client Dashboard'))),
+        path: '/conversations',
+        builder: (context, state) => const ConversationListScreen(),
+      ),
+      GoRoute(
+        path: '/chat',
+        builder: (context, state) {
+          final extra = state.extra as Map<String, dynamic>? ?? {};
+          return ChatScreen(
+            workspaceId: extra['workspaceId'] ?? '',
+            receiverId: extra['receiverId'],
+            groupId: extra['groupId'],
+            title: extra['title'] ?? 'Chat',
+          );
+        },
+      ),
+      GoRoute(
+        path: '/friends',
+        builder: (context, state) => const FriendsScreen(),
+      ),
+      GoRoute(
+        path: '/friends/add',
+        builder: (context, state) => const FriendsScreen(showAddDialog: true),
+      ),
+      GoRoute(
+        path: '/groups/create',
+        builder: (context, state) => const CreateGroupScreen(),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const Scaffold(body: Center(child: Text('Settings'))),
       ),
     ],
   );

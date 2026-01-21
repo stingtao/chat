@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Get friend requests (pending only)
 export async function GET(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -28,6 +31,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Workspace ID is required' },
         { status: 400 }
+      );
+    }
+
+    const membership = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId,
+        userId: payload.userId,
+      },
+    });
+
+    if (!membership) {
+      return NextResponse.json(
+        { success: false, error: 'Not a member of this workspace' },
+        { status: 403 }
       );
     }
 

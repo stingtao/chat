@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Block a user
 export async function POST(
@@ -8,6 +10,7 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -84,6 +87,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -97,6 +101,20 @@ export async function GET(
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
+      );
+    }
+
+    const workspace = await prisma.workspace.findFirst({
+      where: {
+        id: params.id,
+        hostId: payload.userId,
+      },
+    });
+
+    if (!workspace) {
+      return NextResponse.json(
+        { success: false, error: 'Workspace not found' },
+        { status: 404 }
       );
     }
 
@@ -123,6 +141,79 @@ export async function GET(
     console.error('Get blocked users error:', error);
     return NextResponse.json(
       { success: false, error: 'Failed to fetch blocked users' },
+      { status: 500 }
+    );
+  }
+}
+
+// Unblock a user
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const prisma = await getPrismaClientFromContext();
+    const token = request.headers.get('authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const payload = await verifyToken(token);
+    if (!payload || payload.type !== 'host') {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const workspace = await prisma.workspace.findFirst({
+      where: {
+        id: params.id,
+        hostId: payload.userId,
+      },
+    });
+
+    if (!workspace) {
+      return NextResponse.json(
+        { success: false, error: 'Workspace not found' },
+        { status: 404 }
+      );
+    }
+
+    const { userId } = await request.json();
+
+    if (!userId) {
+      return NextResponse.json(
+        { success: false, error: 'User ID is required' },
+        { status: 400 }
+      );
+    }
+
+    const unblocked = await prisma.blockedUser.deleteMany({
+      where: {
+        workspaceId: params.id,
+        userId,
+      },
+    });
+
+    if (unblocked.count === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Blocked user not found' },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      data: { userId },
+    });
+  } catch (error) {
+    console.error('Unblock user error:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to unblock user' },
       { status: 500 }
     );
   }

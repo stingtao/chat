@@ -10,6 +10,7 @@ interface MessageInputProps {
   placeholder?: string;
   disabled?: boolean;
   uploading?: boolean;
+  onTyping?: () => void;
 }
 
 export default function MessageInput({
@@ -18,6 +19,7 @@ export default function MessageInput({
   placeholder,
   disabled = false,
   uploading = false,
+  onTyping,
 }: MessageInputProps) {
   const [message, setMessage] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -92,7 +94,12 @@ export default function MessageInput({
         <input
           type="text"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            setMessage(e.target.value);
+            if (e.target.value.trim()) {
+              onTyping?.();
+            }
+          }}
           onKeyDown={handleKeyDown}
           placeholder={resolvedPlaceholder}
           disabled={disabled}

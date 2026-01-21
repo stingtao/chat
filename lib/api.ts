@@ -125,11 +125,33 @@ export class ApiClient {
     });
   }
 
+  async updateGroup(data: { workspaceId: string; groupId: string; name: string }) {
+    return this.request('/api/client/groups', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async leaveGroup(data: { workspaceId: string; groupId: string }) {
+    return this.request('/api/client/groups', {
+      method: 'DELETE',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Status APIs
   async updateStatus(workspaceId: string) {
     return this.request('/api/client/status', {
       method: 'POST',
       body: JSON.stringify({ workspaceId }),
+    });
+  }
+
+  // Profile APIs
+  async updateProfile(data: { username?: string; avatar?: string | null }) {
+    return this.request('/api/client/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
     });
   }
 

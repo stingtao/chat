@@ -4,9 +4,51 @@ import { formatTime, getInitials } from '@/lib/utils';
 interface MessageBubbleProps {
   message: Message;
   isOwn: boolean;
+  showReadReceipt?: boolean;
 }
 
-export default function MessageBubble({ message, isOwn }: MessageBubbleProps) {
+// Read receipt status icons
+function ReadReceiptIcon({ status }: { status: 'sent' | 'delivered' | 'read' }) {
+  if (status === 'read') {
+    // Double check mark (blue for read)
+    return (
+      <svg className="w-4 h-4 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7M5 13l4 4L19 7" transform="translate(-2, 0)" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7M5 13l4 4L19 7" transform="translate(2, 0)" />
+      </svg>
+    );
+  }
+  if (status === 'delivered') {
+    // Double check mark (gray for delivered)
+    return (
+      <svg className="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" transform="translate(-2, 0)" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" transform="translate(2, 0)" />
+      </svg>
+    );
+  }
+  // Single check mark (gray for sent)
+  return (
+    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+export default function MessageBubble({ message, isOwn, showReadReceipt = false }: MessageBubbleProps) {
+  // Determine read receipt status
+  const getReadStatus = (): 'sent' | 'delivered' | 'read' => {
+    try {
+      const readBy = JSON.parse(message.readBy || '[]');
+      if (Array.isArray(readBy) && readBy.length > 0) {
+        return 'read';
+      }
+    } catch {
+      // If parsing fails, assume sent
+    }
+    // For now, assume delivered if message has an ID (was saved)
+    return message.id ? 'delivered' : 'sent';
+  };
   return (
     <div
       className={`flex items-end gap-2 mb-3 message-slide-in ${
@@ -92,14 +134,15 @@ export default function MessageBubble({ message, isOwn }: MessageBubbleProps) {
         )}
 
         <div
-          className="text-xs mt-1"
+          className="text-xs mt-1 flex items-center gap-1 justify-end"
           style={
             isOwn
               ? { color: 'var(--ws-primary-text)', opacity: 0.8 }
               : { color: '#6b7280' }
           }
         >
-          {formatTime(message.createdAt)}
+          <span>{formatTime(message.createdAt)}</span>
+          {isOwn && showReadReceipt && <ReadReceiptIcon status={getReadStatus()} />}
         </div>
       </div>
     </div>

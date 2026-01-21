@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Get spam reports
 export async function GET(
@@ -8,6 +10,7 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -73,6 +76,7 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(

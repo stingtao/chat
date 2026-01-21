@@ -220,11 +220,11 @@ npm run dev
 ## ⏭️ Next Steps
 
 ### Priority 1: Core Functionality
-- [ ] **WebSocket/Durable Objects** - Real-time messaging
-- [ ] **Friend Request UI** - Accept/reject interface
-- [ ] **File Upload** - R2 integration for images
-- [ ] **Group Chat UI** - Create and manage groups
-- [ ] **Host Dashboard** - Management interface
+- [x] **WebSocket/Durable Objects** - Real-time messaging with polling fallback
+- [x] **Friend Request UI** - Accept/reject interface
+- [x] **File Upload** - R2 integration for images and avatars
+- [x] **Group Chat UI** - Create, rename, and leave groups
+- [x] **Host Dashboard** - Management interface + analytics cards
 
 ### Priority 2: Enhanced Features
 - [ ] **Unread Badges** - Message count indicators
@@ -302,12 +302,11 @@ npm run dev
 
 ## ⚠️ Known Limitations
 
-1. **No Real-time Updates** - Currently using polling, needs WebSocket
-2. **Friend Requests** - Backend complete, UI acceptance flow missing
-3. **File Upload** - Button present, R2 integration pending
-4. **Group UI** - Backend ready, creation UI not built
-5. **Host Dashboard** - Not yet implemented
-6. **Mobile Apps** - Web only (PWA configured)
+1. **Unread Badges** - No per-conversation unread counters yet
+2. **Typing Indicators** - WebSocket plumbing exists but UI not wired
+3. **Read Receipts** - `readBy` stored but not surfaced
+4. **Rate Limiting** - No API throttling or abuse protection
+5. **Mobile Apps** - Web only (PWA configured)
 
 ---
 
@@ -322,8 +321,7 @@ npm run dev
 - Environment variables template
 
 ### Needs Work ⚠️
-- WebSocket integration
-- File upload implementation
+- Typing indicators & read receipts UI
 - Message pagination
 - Rate limiting
 - Error monitoring

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { appendLangToHref, getTranslations, normalizeLang } from "@/lib/i18n";
 
+export const runtime = 'edge';
+
 export default async function Home({
   searchParams,
 }: {

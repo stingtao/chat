@@ -20,7 +20,7 @@ The chat interface is now fully functional with a modern, WhatsApp-like design. 
 ### ✅ Chat Features
 - **Direct Messaging** - One-on-one conversations with friends
 - **Group Chats** - Create and participate in group conversations
-- **Real-time Updates** - Messages appear instantly (polling-based, WebSocket ready)
+- **Real-time Updates** - WebSocket with polling fallback
 - **Message History** - Full conversation history
 - **Typing Indicators** - (Ready for WebSocket integration)
 
@@ -32,7 +32,7 @@ The chat interface is now fully functional with a modern, WhatsApp-like design. 
 ### ✅ User Interface
 - **Conversation List** - View all active chats
 - **Chat Window** - Clean message interface with bubbles
-- **Message Input** - Send text messages with attachment button (ready)
+- **Message Input** - Send text messages with attachments (R2)
 - **Responsive Design** - Works on desktop and mobile
 - **Custom Branding** - Workspace colors and logos
 
@@ -83,7 +83,7 @@ You can also insert test data directly into the database using Prisma Studio or 
    - Click the "Add Friends" button (top right, user+ icon)
    - Browse workspace members
    - Click "Add" to send friend request
-   - Other user must accept (currently auto-accepted)
+   - Other user accepts via the Friend Requests panel
 
 4. **Start Chatting**
    - Click on a friend from the conversation list
@@ -91,9 +91,9 @@ You can also insert test data directly into the database using Prisma Studio or 
    - Press Enter or click send button
    - Messages appear in real-time
 
-5. **Create Groups** (Coming Soon)
-   - Group creation UI to be added
-   - Backend API is ready
+5. **Create Groups**
+   - Click the group icon in the top bar
+   - Pick a name and members
 
 ## Component Structure
 
@@ -109,6 +109,10 @@ You can also insert test data directly into the database using Prisma Studio or 
   ConversationList.tsx     - Sidebar with friends/groups
   WorkspaceSwitcher.tsx    - Workspace selector modal
   FriendList.tsx           - Add friends modal
+  FriendRequests.tsx       - Accept/decline requests
+  CreateGroup.tsx          - Group creation modal
+  GroupSettings.tsx        - Rename/leave group modal
+  ProfileSettings.tsx      - Update avatar/username
 
 /stores
   chatStore.ts             - Zustand state management
@@ -130,6 +134,10 @@ You can also insert test data directly into the database using Prisma Studio or 
 - `POST /api/client/friends` - Send friend request
 - `GET /api/client/groups` - List groups
 - `POST /api/client/groups` - Create group
+- `PUT /api/client/groups` - Rename group
+- `DELETE /api/client/groups` - Leave group
+- `PUT /api/client/profile` - Update profile
+- `POST /api/client/spam-reports` - Report spam
 
 ## Testing Checklist
 
@@ -148,40 +156,31 @@ You can also insert test data directly into the database using Prisma Studio or 
 
 ## Known Limitations (To Be Implemented)
 
-1. **Real-time Communication**
-   - Currently using polling (refresh to see new messages)
-   - Need to integrate WebSocket with Durable Objects
-   - Typing indicators not functional yet
-   - Online/offline status is static
+1. **Unread Badges**
+   - No per-conversation unread counters yet
 
-2. **Friend Requests**
-   - Friend requests are created but acceptance flow not in UI
-   - Need to add pending requests section
+2. **Typing Indicators**
+   - WebSocket plumbing exists but UI not wired
 
-3. **File Uploads**
-   - Attachment button present but not functional
-   - Need to integrate Cloudflare R2
+3. **Read Receipts**
+   - `readBy` stored but not surfaced in UI
 
-4. **Group Management**
-   - Create group UI not added yet
-   - Backend API is ready
-
-5. **Notifications**
+4. **Notifications**
    - No push notifications
    - No unread message badges
 
-6. **Mobile App**
+5. **Mobile App**
    - Web-only, native apps not built yet
    - PWA support is configured
 
 ## Next Steps
 
 ### Immediate (Priority 1)
-1. Add WebSocket support with Durable Objects
-2. Implement friend request acceptance UI
-3. Add file upload to R2
-4. Create group chat UI
-5. Add unread message badges
+1. Add unread message badges
+2. Implement typing indicators UI
+3. Surface read receipts
+4. Add message search
+5. Add rate limiting
 
 ### Short Term (Priority 2)
 1. Add message search

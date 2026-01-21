@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyPassword, generateToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const { email, password } = await request.json();
 
     if (!email || !password) {

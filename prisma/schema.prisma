@@ -92,6 +92,8 @@ model User {
   groupMemberships  GroupMember[]
   blockedBy         BlockedUser[]
   spamReports       SpamReport[]
+  deviceTokens      DeviceToken[]
+  notifications     Notification[]
 
   @@index([email])
   @@index([username])
@@ -229,4 +231,42 @@ model SpamReport {
   @@index([workspaceId])
   @@index([reporterId])
   @@index([status])
+}
+
+// Device tokens for push notifications
+model DeviceToken {
+  id          String    @id @default(uuid())
+  userId      String
+  token       String    @unique
+  platform    String    // ios, android, web
+  deviceName  String?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@index([platform])
+}
+
+// Notification history
+model Notification {
+  id          String    @id @default(uuid())
+  userId      String
+  workspaceId String?
+  type        String    // message, friend_request, group_invite, system
+  title       String
+  body        String
+  data        String?   // JSON string for additional data
+  isRead      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([workspaceId])
+  @@index([isRead])
+  @@index([createdAt])
 }

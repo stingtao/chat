@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Message } from '@/lib/types';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
@@ -15,8 +15,15 @@ interface ChatWindowProps {
   onBack?: () => void;
   onSendMessage: (content: string) => void;
   onFileUpload?: (file: File) => void;
+  onOpenOptions?: () => void;
   loading?: boolean;
+  inputDisabled?: boolean;
   uploading?: boolean;
+  typingUsers?: { id: string; name: string }[];
+  onTypingStart?: () => void;
+  onTypingStop?: () => void;
+  isOnline?: boolean;
+  lastSeen?: Date;
 }
 
 export default function ChatWindow({
@@ -27,10 +34,19 @@ export default function ChatWindow({
   onBack,
   onSendMessage,
   onFileUpload,
+  onOpenOptions,
   loading = false,
+  inputDisabled,
   uploading = false,
+  typingUsers = [],
+  onTypingStart,
+  onTypingStop,
+  isOnline,
+  lastSeen,
 }: ChatWindowProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isTyping, setIsTyping] = useState(false);
   const lang = useLang();
   const t = getTranslations(lang);
 
@@ -41,6 +57,60 @@ export default function ChatWindow({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Handle typing indicator
+  const handleTyping = useCallback(() => {
+    if (!isTyping) {
+      setIsTyping(true);
+      onTypingStart?.();
+    }
+
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set timeout to stop typing indicator after 2 seconds of inactivity
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      onTypingStop?.();
+    }, 2000);
+  }, [isTyping, onTypingStart, onTypingStop]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Format last seen time
+  const formatLastSeen = (date: Date) => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return t.chatWindow.justNow || 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${days}d ago`;
+  };
+
+  // Get typing indicator text
+  const getTypingText = () => {
+    if (typingUsers.length === 0) return null;
+    if (typingUsers.length === 1) {
+      return `${typingUsers[0].name} ${t.chatWindow.isTyping || 'is typing'}...`;
+    }
+    if (typingUsers.length === 2) {
+      return `${typingUsers[0].name} ${t.chatWindow.and || 'and'} ${typingUsers[1].name} ${t.chatWindow.areTyping || 'are typing'}...`;
+    }
+    return `${typingUsers.length} ${t.chatWindow.peopleTyping || 'people are typing'}...`;
+  };
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -81,9 +151,28 @@ export default function ChatWindow({
         </div>
         <div className="flex-1">
           <h2 className="font-semibold text-gray-900">{conversationName}</h2>
-          <p className="text-xs" style={{ color: 'var(--ws-secondary)' }}>{t.chatWindow.online}</p>
+          <p className="text-xs flex items-center gap-1">
+            {isOnline !== undefined && (
+              <>
+                <span
+                  className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`}
+                />
+                <span style={{ color: isOnline ? 'var(--ws-secondary)' : '#9ca3af' }}>
+                  {isOnline
+                    ? t.chatWindow.online
+                    : lastSeen
+                      ? `${t.chatWindow.lastSeen || 'Last seen'} ${formatLastSeen(lastSeen)}`
+                      : t.chatWindow.offline || 'Offline'}
+                </span>
+              </>
+            )}
+          </p>
         </div>
-        <button className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100">
+        <button
+          type="button"
+          onClick={onOpenOptions}
+          className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100"
+        >
           <svg
             className="w-6 h-6"
             fill="none"
@@ -131,13 +220,28 @@ export default function ChatWindow({
           </div>
         ) : (
           <>
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <MessageBubble
                 key={message.id}
                 message={message}
                 isOwn={message.senderId === currentUserId}
+                showReadReceipt={
+                  message.senderId === currentUserId &&
+                  index === messages.length - 1
+                }
               />
             ))}
+            {/* Typing Indicator */}
+            {typingUsers.length > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2">
+                <div className="flex gap-1">
+                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-sm text-gray-500">{getTypingText()}</span>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </>
         )}
@@ -147,8 +251,9 @@ export default function ChatWindow({
       <MessageInput
         onSend={onSendMessage}
         onFileUpload={onFileUpload}
-        disabled={loading}
+        disabled={inputDisabled ?? loading}
         uploading={uploading}
+        onTyping={handleTyping}
       />
     </div>
   );

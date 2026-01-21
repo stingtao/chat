@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Send friend request
 export async function POST(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -27,6 +30,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Workspace ID and receiver ID are required' },
         { status: 400 }
+      );
+    }
+
+    const senderMembership = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId,
+        userId: payload.userId,
+      },
+    });
+
+    if (!senderMembership) {
+      return NextResponse.json(
+        { success: false, error: 'Not a member of this workspace' },
+        { status: 403 }
+      );
+    }
+
+    const receiverMembership = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId,
+        userId: receiverId,
+      },
+    });
+
+    if (!receiverMembership) {
+      return NextResponse.json(
+        { success: false, error: 'Receiver not in workspace' },
+        { status: 404 }
       );
     }
 
@@ -112,6 +143,7 @@ export async function POST(request: NextRequest) {
 // Get friends
 export async function GET(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -135,6 +167,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Workspace ID is required' },
         { status: 400 }
+      );
+    }
+
+    const membership = await prisma.workspaceMember.findFirst({
+      where: {
+        workspaceId,
+        userId: payload.userId,
+      },
+    });
+
+    if (!membership) {
+      return NextResponse.json(
+        { success: false, error: 'Not a member of this workspace' },
+        { status: 403 }
       );
     }
 
@@ -212,6 +258,7 @@ export async function GET(request: NextRequest) {
 // Accept/reject friend request
 export async function PUT(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(

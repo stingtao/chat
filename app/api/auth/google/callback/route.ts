@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { GoogleOAuth, verifyState, mergeAuthProviders } from '@/lib/oauth';
 import { generateToken } from '@/lib/auth';
 import { normalizeLang } from '@/lib/i18n';
+
+export const runtime = 'edge';
 
 /**
  * GET /api/auth/google/callback?code=...&state=...
@@ -10,6 +12,7 @@ import { normalizeLang } from '@/lib/i18n';
  */
 export async function GET(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const searchParams = request.nextUrl.searchParams;
     const code = searchParams.get('code');
     const stateParam = searchParams.get('state');

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { LineOAuth, generateState } from '@/lib/oauth';
 import { normalizeLang } from '@/lib/i18n';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/auth/line?type=host|client
  * Initiates LINE OAuth flow

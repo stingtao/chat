@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { api } from '@/lib/api';
 
-export function useMessagePolling(intervalMs: number = 3000) {
+export function useMessagePolling(intervalMs: number = 3000, enabled: boolean = true) {
   const {
     currentWorkspace,
     currentConversationId,
@@ -14,7 +14,7 @@ export function useMessagePolling(intervalMs: number = 3000) {
   const lastMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!currentWorkspace || !currentConversationId) return;
+    if (!enabled || !currentWorkspace || !currentConversationId) return;
 
     // Update last message ID when messages change
     if (messages.length > 0) {
@@ -50,5 +50,5 @@ export function useMessagePolling(intervalMs: number = 3000) {
     const interval = setInterval(pollMessages, intervalMs);
 
     return () => clearInterval(interval);
-  }, [currentWorkspace, currentConversationId, currentConversationType, messages.length, intervalMs]);
+  }, [enabled, currentWorkspace, currentConversationId, currentConversationType, messages.length, intervalMs]);
 }

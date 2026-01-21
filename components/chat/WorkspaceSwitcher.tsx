@@ -11,6 +11,7 @@ interface WorkspaceSwitcherProps {
   onSelectWorkspace: (workspace: Workspace) => void;
   onJoinWorkspace: (inviteCode: string) => void;
   onClose: () => void;
+  initialShowJoinForm?: boolean;
 }
 
 export default function WorkspaceSwitcher({
@@ -19,11 +20,9 @@ export default function WorkspaceSwitcher({
   onSelectWorkspace,
   onJoinWorkspace,
   onClose,
+  initialShowJoinForm = false,
 }: WorkspaceSwitcherProps) {
-  console.log('WorkspaceSwitcher component rendered!');
-  console.log('Props:', { workspaces, currentWorkspace, showJoinForm: false });
-
-  const [showJoinForm, setShowJoinForm] = useState(false);
+  const [showJoinForm, setShowJoinForm] = useState(initialShowJoinForm);
   const [inviteCode, setInviteCode] = useState('');
   const lang = useLang();
   const t = getTranslations(lang);

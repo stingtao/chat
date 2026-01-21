@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from '@/lib/auth';
+import { getCloudflareEnv } from '@/lib/cloudflare';
 
-export const runtime = 'nodejs';
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
+    const env = getCloudflareEnv();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -63,31 +65,36 @@ export async function POST(request: NextRequest) {
     // Generate unique file name
     const timestamp = Date.now();
     const randomString = Math.random().toString(36).substring(2, 15);
-    const extension = file.name.split('.').pop();
-    const fileName = `${payload.userId}/${timestamp}-${randomString}.${extension}`;
+    const extension = file.name.includes('.') ? file.name.split('.').pop() : 'bin';
+    const safeExtension = extension || 'bin';
+    const fileName = `${payload.userId}/${timestamp}-${randomString}.${safeExtension}`;
 
     // Get R2 bucket from environment
-    const STORAGE = (process.env as any).STORAGE;
-    if (!STORAGE) {
+    const storage = env?.STORAGE;
+    if (!storage) {
       return NextResponse.json(
         { success: false, error: 'Storage not configured' },
         { status: 500 }
       );
     }
 
-    // Convert file to buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
     // Upload to R2
-    await STORAGE.put(fileName, buffer, {
+    const arrayBuffer = await file.arrayBuffer();
+    await storage.put(fileName, arrayBuffer, {
       httpMetadata: {
-        contentType: file.type,
+        contentType: file.type || 'application/octet-stream',
       },
     });
 
     // Generate public URL
-    const publicUrl = `https://chat-storage.your-account.r2.cloudflarestorage.com/${fileName}`;
+    const publicBaseUrl = env?.R2_PUBLIC_BASE_URL || process.env.R2_PUBLIC_BASE_URL;
+    if (!publicBaseUrl) {
+      return NextResponse.json(
+        { success: false, error: 'Public storage URL not configured' },
+        { status: 500 }
+      );
+    }
+    const publicUrl = `${publicBaseUrl.replace(/\/$/, '')}/${fileName}`;
 
     return NextResponse.json({
       success: true,

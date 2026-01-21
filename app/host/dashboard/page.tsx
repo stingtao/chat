@@ -19,6 +19,7 @@ export default function HostDashboardPage() {
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [spamReports, setSpamReports] = useState<SpamReport[]>([]);
+  const [workspaceStats, setWorkspaceStats] = useState({ messages: 0, groups: 0 });
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'spam' | 'settings'>('overview');
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
@@ -88,6 +89,17 @@ export default function HostDashboardPage() {
     if (!selectedWorkspace || !token) return;
 
     const loadWorkspaceData = async () => {
+      const detailRes = await fetch(`/api/host/workspace/${selectedWorkspace.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const detailData = await detailRes.json();
+      if (detailData.success && detailData.data?._count) {
+        setWorkspaceStats({
+          messages: detailData.data._count.messages || 0,
+          groups: detailData.data._count.groups || 0,
+        });
+      }
+
       // Load members
       const membersRes = await fetch(
         `/api/host/workspace/${selectedWorkspace.id}/members`,
@@ -479,13 +491,29 @@ export default function HostDashboardPage() {
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="p-4 bg-blue-50 rounded-lg">
                           <div className="text-sm text-blue-600 font-medium">
                             {t.hostDashboard.overview.totalMembers}
                           </div>
                           <div className="text-3xl font-bold text-blue-900 mt-1">
                             {members.length}
+                          </div>
+                        </div>
+                        <div className="p-4 bg-indigo-50 rounded-lg">
+                          <div className="text-sm text-indigo-600 font-medium">
+                            {t.hostDashboard.overview.totalMessages}
+                          </div>
+                          <div className="text-3xl font-bold text-indigo-900 mt-1">
+                            {workspaceStats.messages}
+                          </div>
+                        </div>
+                        <div className="p-4 bg-emerald-50 rounded-lg">
+                          <div className="text-sm text-emerald-600 font-medium">
+                            {t.hostDashboard.overview.totalGroups}
+                          </div>
+                          <div className="text-3xl font-bold text-emerald-900 mt-1">
+                            {workspaceStats.groups}
                           </div>
                         </div>
                         <div className="p-4 bg-red-50 rounded-lg">

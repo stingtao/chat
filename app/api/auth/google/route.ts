@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { GoogleOAuth, generateState } from '@/lib/oauth';
 import { normalizeLang } from '@/lib/i18n';
 
+export const runtime = 'edge';
+
 /**
  * GET /api/auth/google?type=host|client
  * Initiates Google OAuth flow

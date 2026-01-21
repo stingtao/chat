@@ -1,14 +1,21 @@
 import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
-
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'your-secret-key-change-in-production'
-);
+import { getCloudflareEnv } from './cloudflare';
 
 export interface JWTPayload {
   userId: string;
   email: string;
   type: 'host' | 'client';
+}
+
+function getJwtSecret(secretOverride?: string): Uint8Array {
+  const envSecret = getCloudflareEnv()?.JWT_SECRET;
+  const secret =
+    secretOverride ||
+    envSecret ||
+    process.env.JWT_SECRET ||
+    'your-secret-key-change-in-production';
+  return new TextEncoder().encode(secret);
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -19,7 +26,8 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   return bcrypt.compare(password, hash);
 }
 
-export async function generateToken(payload: JWTPayload): Promise<string> {
+export async function generateToken(payload: JWTPayload, secretOverride?: string): Promise<string> {
+  const JWT_SECRET = getJwtSecret(secretOverride);
   const token = await new SignJWT(payload as any)
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime('7d')
@@ -29,8 +37,12 @@ export async function generateToken(payload: JWTPayload): Promise<string> {
   return token;
 }
 
-export async function verifyToken(token: string): Promise<JWTPayload | null> {
+export async function verifyToken(
+  token: string,
+  secretOverride?: string
+): Promise<JWTPayload | null> {
   try {
+    const JWT_SECRET = getJwtSecret(secretOverride);
     const { payload } = await jwtVerify(token, JWT_SECRET);
     return payload as JWTPayload;
   } catch {

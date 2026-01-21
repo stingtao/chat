@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
+
+export const runtime = 'edge';
 
 // Update workspace settings
 export async function PUT(
@@ -8,6 +10,7 @@ export async function PUT(
   { params }: { params: { id: string } }
 ) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(

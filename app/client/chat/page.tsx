@@ -10,9 +10,12 @@ import WorkspaceSwitcher from '@/components/chat/WorkspaceSwitcher';
 import FriendList from '@/components/chat/FriendList';
 import FriendRequests from '@/components/chat/FriendRequests';
 import CreateGroup from '@/components/chat/CreateGroup';
+import GroupSettings from '@/components/chat/GroupSettings';
+import ProfileSettings from '@/components/chat/ProfileSettings';
 import { useMessagePolling } from '@/hooks/useMessagePolling';
+import { useRealtimeChat } from '@/hooks/useRealtimeChat';
 import { useStatusUpdate } from '@/hooks/useStatusUpdate';
-import { Friendship, WorkspaceMember } from '@/lib/types';
+import { Friendship, Workspace, WorkspaceMember } from '@/lib/types';
 import { getContrastColor, hexToRgba, normalizeHexColor } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang, useLangHref } from '@/hooks/useLang';
@@ -45,7 +48,8 @@ export default function ChatPage() {
     reset,
   } = useChatStore();
 
-  const [loading, setLoading] = useState(true);
+  const [workspacesLoading, setWorkspacesLoading] = useState(true);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
@@ -54,12 +58,20 @@ export default function ChatPage() {
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [pendingFriendRequests, setPendingFriendRequests] = useState<Friendship[]>([]);
   const [hasUnseenFriendRequests, setHasUnseenFriendRequests] = useState(false);
+  const [showGroupSettings, setShowGroupSettings] = useState(false);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
+  const [workspaceSwitcherJoinMode, setWorkspaceSwitcherJoinMode] = useState(false);
   const seenFriendRequestIdsRef = useRef<Record<string, Set<string>>>({});
-  const lastWorkspaceIdRef = useRef<string | null>(null);
   const lang = useLang();
   const t = getTranslations(lang);
   const withLang = useLangHref();
 
+  const hasWorkspace = Boolean(currentWorkspace);
+  const workspaceName = currentWorkspace?.name || t.chat.noWorkspaceTitle;
+  const workspaceInitials = currentWorkspace?.name
+    ? currentWorkspace.name.substring(0, 2).toUpperCase()
+    : '++';
+  const workspaceLogo = currentWorkspace?.settings?.logo;
   const workspaceSettings = currentWorkspace?.settings;
   const primaryColor = normalizeHexColor(workspaceSettings?.primaryColor, '#3b82f6');
   const secondaryColor = normalizeHexColor(workspaceSettings?.secondaryColor, '#10b981');
@@ -71,9 +83,10 @@ export default function ChatPage() {
     '--ws-primary-text': getContrastColor(primaryColor),
     '--ws-secondary-text': getContrastColor(secondaryColor),
   } as CSSProperties;
-  const welcomeMessage = workspaceSettings?.welcomeMessage?.trim();
-  const allowGroupChat = workspaceSettings?.allowGroupChat ?? true;
+  const welcomeMessage = hasWorkspace ? workspaceSettings?.welcomeMessage?.trim() : undefined;
+  const allowGroupChat = hasWorkspace ? (workspaceSettings?.allowGroupChat ?? true) : false;
   const maxGroupSize = workspaceSettings?.maxGroupSize ?? 100;
+  const canCreateGroup = hasWorkspace && allowGroupChat;
   const getSeenRequestIds = (workspaceId: string) => {
     if (!seenFriendRequestIdsRef.current[workspaceId]) {
       seenFriendRequestIdsRef.current[workspaceId] = new Set<string>();
@@ -97,8 +110,48 @@ export default function ChatPage() {
     }
   };
 
-  // Enable message polling for real-time updates
-  useMessagePolling(3000);
+  const openWorkspaceSwitcher = (mode: 'list' | 'join' = 'list') => {
+    setWorkspaceSwitcherJoinMode(mode === 'join');
+    if (!showWorkspaceSwitcher) {
+      toggleWorkspaceSwitcher();
+    }
+  };
+
+  const closeWorkspaceSwitcher = () => {
+    if (showWorkspaceSwitcher) {
+      toggleWorkspaceSwitcher();
+    }
+    setWorkspaceSwitcherJoinMode(false);
+  };
+
+  const selectWorkspace = (workspace: Workspace, options?: { closeSwitcher?: boolean }) => {
+    if (currentWorkspace?.id === workspace.id) {
+      if (options?.closeSwitcher) {
+        closeWorkspaceSwitcher();
+      }
+      return;
+    }
+
+    setCurrentConversation(null, null);
+    setMessages([]);
+    setFriends([]);
+    setGroups([]);
+    setWorkspaceMembers([]);
+    setPendingFriendRequests([]);
+    setHasUnseenFriendRequests(false);
+    setCurrentMemberTag('');
+    setMessagesLoading(false);
+    setCurrentWorkspace(workspace);
+
+    if (options?.closeSwitcher) {
+      closeWorkspaceSwitcher();
+    }
+  };
+
+  const { connected: realtimeConnected } = useRealtimeChat();
+
+  // Enable message polling for real-time updates (fallback when websocket is down)
+  useMessagePolling(3000, !realtimeConnected);
 
   // Update user's online status every 30 seconds
   useStatusUpdate(30000);
@@ -124,14 +177,18 @@ export default function ChatPage() {
     if (!token) return;
 
     const loadWorkspaces = async () => {
-      const response = await api.getWorkspaces();
-      if (response.success && response.data) {
-        setWorkspaces(response.data);
-        if (response.data.length > 0 && !currentWorkspace) {
-          setCurrentWorkspace(response.data[0]);
+      setWorkspacesLoading(true);
+      try {
+        const response = await api.getWorkspaces();
+        if (response.success && response.data) {
+          setWorkspaces(response.data);
+          if (response.data.length > 0 && !currentWorkspace) {
+            setCurrentWorkspace(response.data[0]);
+          }
         }
+      } finally {
+        setWorkspacesLoading(false);
       }
-      setLoading(false);
     };
 
     loadWorkspaces();
@@ -183,31 +240,25 @@ export default function ChatPage() {
     return () => clearInterval(interval);
   }, [currentWorkspace, token, user]);
 
-  useEffect(() => {
-    if (!currentWorkspace?.id) return;
-    if (lastWorkspaceIdRef.current && lastWorkspaceIdRef.current !== currentWorkspace.id) {
-      setPendingFriendRequests([]);
-      setHasUnseenFriendRequests(false);
-    }
-    lastWorkspaceIdRef.current = currentWorkspace.id;
-  }, [currentWorkspace?.id]);
-
   // Load messages when conversation changes
   useEffect(() => {
     if (!currentWorkspace || !currentConversationId || !token) return;
 
     const loadMessages = async () => {
-      setLoading(true);
-      const response = await api.getMessages(
-        currentWorkspace.id,
-        currentConversationType === 'direct' ? currentConversationId : undefined,
-        currentConversationType === 'group' ? currentConversationId : undefined
-      );
+      setMessagesLoading(true);
+      try {
+        const response = await api.getMessages(
+          currentWorkspace.id,
+          currentConversationType === 'direct' ? currentConversationId : undefined,
+          currentConversationType === 'group' ? currentConversationId : undefined
+        );
 
-      if (response.success && response.data) {
-        setMessages(response.data);
+        if (response.success && response.data) {
+          setMessages(response.data);
+        }
+      } finally {
+        setMessagesLoading(false);
       }
-      setLoading(false);
     };
 
     loadMessages();
@@ -270,10 +321,10 @@ export default function ChatPage() {
   const handleJoinWorkspace = async (inviteCode: string) => {
     const response = await api.joinWorkspace(inviteCode);
     if (response.success && response.data) {
-      const newWorkspaces = [...workspaces, response.data];
+      const exists = workspaces.some((workspace) => workspace.id === response.data.id);
+      const newWorkspaces = exists ? workspaces : [...workspaces, response.data];
       setWorkspaces(newWorkspaces);
-      setCurrentWorkspace(response.data);
-      toggleWorkspaceSwitcher(); // Close the modal
+      selectWorkspace(response.data, { closeSwitcher: true });
       alert(t.chat.joinSuccess(response.data.name));
     } else {
       alert(t.chat.joinFailure(response.error || t.chat.unknownError));
@@ -301,14 +352,13 @@ export default function ChatPage() {
   };
 
   const handleOpenFriendRequests = () => {
-    if (currentWorkspace && user) {
-      const incomingIds = pendingFriendRequests
-        .filter((request) => request.receiverId === user.id)
-        .map((request) => request.id);
-      const seenSet = getSeenRequestIds(currentWorkspace.id);
-      incomingIds.forEach((id) => seenSet.add(id));
-      setHasUnseenFriendRequests(false);
-    }
+    if (!currentWorkspace || !user) return;
+    const incomingIds = pendingFriendRequests
+      .filter((request) => request.receiverId === user.id)
+      .map((request) => request.id);
+    const seenSet = getSeenRequestIds(currentWorkspace.id);
+    incomingIds.forEach((id) => seenSet.add(id));
+    setHasUnseenFriendRequests(false);
     setShowFriendRequests(true);
   };
 
@@ -330,6 +380,61 @@ export default function ChatPage() {
       }
     } else {
       alert(t.chat.createGroupFailed(response.error || t.chat.unknownError));
+    }
+  };
+
+  const handleRenameGroup = async (name: string) => {
+    if (!currentWorkspace || !currentGroup) return;
+
+    const response = await api.updateGroup({
+      workspaceId: currentWorkspace.id,
+      groupId: currentGroup.id,
+      name,
+    });
+
+    if (response.success) {
+      const groupsResponse = await api.getGroups(currentWorkspace.id);
+      if (groupsResponse.success && groupsResponse.data) {
+        setGroups(groupsResponse.data);
+      }
+    } else {
+      alert(t.groupSettings.renameFailed(response.error || t.chat.unknownError));
+    }
+  };
+
+  const handleLeaveGroup = async () => {
+    if (!currentWorkspace || !currentGroup) return;
+
+    const response = await api.leaveGroup({
+      workspaceId: currentWorkspace.id,
+      groupId: currentGroup.id,
+    });
+
+    if (response.success) {
+      const groupsResponse = await api.getGroups(currentWorkspace.id);
+      if (groupsResponse.success && groupsResponse.data) {
+        setGroups(groupsResponse.data);
+      }
+      setShowGroupSettings(false);
+      if (currentConversationId === currentGroup.id) {
+        setCurrentConversation(null, null);
+        setMessages([]);
+      }
+    } else {
+      alert(t.groupSettings.leaveFailed(response.error || t.chat.unknownError));
+    }
+  };
+
+  const handleUpdateProfile = async (data: { username?: string; avatar?: string | null }) => {
+    if (!user) return;
+
+    const response = await api.updateProfile(data);
+    if (response.success && response.data) {
+      setUser(response.data);
+      localStorage.setItem('user', JSON.stringify(response.data));
+      setShowProfileSettings(false);
+    } else {
+      alert(t.profileSettings.saveFailed(response.error || t.chat.unknownError));
     }
   };
 
@@ -362,58 +467,11 @@ export default function ChatPage() {
   };
 
   const conversation = getCurrentConversation();
+  const currentGroup =
+    currentConversationType === 'group'
+      ? groups.find((group) => group.id === currentConversationId) || null
+      : null;
   const hasActiveConversation = Boolean(conversation && user);
-
-  if (loading && !currentWorkspace) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-100" style={themeStyle}>
-        <div
-          className="animate-spin rounded-full h-12 w-12 border-b-2"
-          style={{ borderBottomColor: 'var(--ws-primary)' }}
-        ></div>
-      </div>
-    );
-  }
-
-  if (!currentWorkspace) {
-    console.log('[No Workspace Screen] Rendering, showWorkspaceSwitcher:', showWorkspaceSwitcher);
-    return (
-      <>
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4" style={themeStyle}>
-          <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
-            <h2 className="text-2xl font-bold text-gray-900 mb-4">{t.chat.noWorkspaceTitle}</h2>
-            <p className="text-gray-600 mb-6">
-              {t.chat.noWorkspaceSubtitle}
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                console.log('=== Join Workspace button clicked ===');
-                console.log('Before toggle - showWorkspaceSwitcher:', showWorkspaceSwitcher);
-                toggleWorkspaceSwitcher();
-                console.log('After toggle called');
-              }}
-              className="w-full py-2 px-4 rounded-lg font-medium transition-colors hover:opacity-90"
-              style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
-            >
-              {t.chat.joinWorkspace}
-            </button>
-          </div>
-        </div>
-
-        {/* Workspace Switcher Modal - MUST be here too! */}
-        {showWorkspaceSwitcher && (
-          <WorkspaceSwitcher
-            workspaces={workspaces}
-            currentWorkspace={currentWorkspace}
-            onSelectWorkspace={setCurrentWorkspace}
-            onJoinWorkspace={handleJoinWorkspace}
-            onClose={toggleWorkspaceSwitcher}
-          />
-        )}
-      </>
-    );
-  }
 
   return (
     <div className="h-screen flex flex-col bg-gray-100" style={themeStyle}>
@@ -422,39 +480,46 @@ export default function ChatPage() {
         className="p-4 flex items-center justify-between shadow-lg"
         style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <button
             type="button"
-            onClick={() => {
-              console.log('Workspace switcher button clicked');
-              console.log('Current showWorkspaceSwitcher:', showWorkspaceSwitcher);
-              toggleWorkspaceSwitcher();
-            }}
+            onClick={() => openWorkspaceSwitcher(hasWorkspace ? 'list' : 'join')}
             className="w-10 h-10 rounded-xl flex items-center justify-center font-bold transition-colors overflow-hidden"
             style={{
               backgroundColor: 'var(--ws-secondary)',
               color: 'var(--ws-secondary-text)',
             }}
+            aria-label={hasWorkspace ? t.workspaceSwitcher.title : t.chat.joinWorkspace}
+            title={hasWorkspace ? t.workspaceSwitcher.title : t.chat.joinWorkspace}
           >
-            {currentWorkspace.settings?.logo ? (
+            {workspaceLogo ? (
               <img
-                src={currentWorkspace.settings.logo}
-                alt={currentWorkspace.name}
+                src={workspaceLogo}
+                alt={workspaceName}
                 className="w-full h-full object-cover"
               />
+            ) : hasWorkspace ? (
+              workspaceInitials
             ) : (
-              currentWorkspace.name.substring(0, 2).toUpperCase()
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 5v14m7-7H5"
+                />
+              </svg>
             )}
           </button>
-          <div>
-            <h1 className="font-semibold">{currentWorkspace.name}</h1>
-            <p className="text-xs opacity-80">
-              {user?.username}
-              {currentMemberTag && <span className="opacity-75">#{currentMemberTag}</span>}
-              {' • '}{user?.email}
-            </p>
-            <p className="text-xs opacity-80">
-              {t.chat.stats(friends.length, groups.length)}
+          <div className="min-w-0">
+            <h1 className="font-semibold truncate">{workspaceName}</h1>
+            <p className="text-xs opacity-80 truncate">
+              {hasWorkspace ? t.chat.stats(friends.length, groups.length) : t.chat.noWorkspaceSubtitle}
             </p>
           </div>
         </div>
@@ -462,12 +527,12 @@ export default function ChatPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => allowGroupChat && setShowCreateGroup(true)}
+            onClick={() => canCreateGroup && setShowCreateGroup(true)}
             className={`p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors ${
-              allowGroupChat ? '' : 'opacity-50 cursor-not-allowed'
+              canCreateGroup ? '' : 'opacity-50 cursor-not-allowed'
             }`}
-            title={allowGroupChat ? t.chat.createGroup : t.chat.createGroupDisabled}
-            disabled={!allowGroupChat}
+            title={canCreateGroup ? t.chat.createGroup : t.chat.createGroupDisabled}
+            disabled={!canCreateGroup}
           >
             <svg
               className="w-6 h-6"
@@ -486,7 +551,10 @@ export default function ChatPage() {
           <button
             type="button"
             onClick={handleOpenFriendRequests}
-            className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors relative"
+            disabled={!hasWorkspace}
+            className={`p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors relative ${
+              hasWorkspace ? '' : 'opacity-50 cursor-not-allowed'
+            }`}
             title={t.chat.friendRequests}
           >
             {hasUnseenFriendRequests && (
@@ -508,8 +576,11 @@ export default function ChatPage() {
           </button>
           <button
             type="button"
-            onClick={toggleFriendList}
-            className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors"
+            onClick={() => hasWorkspace && toggleFriendList()}
+            disabled={!hasWorkspace}
+            className={`p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors ${
+              hasWorkspace ? '' : 'opacity-50 cursor-not-allowed'
+            }`}
             title={t.chat.addFriends}
           >
             <svg
@@ -523,6 +594,26 @@ export default function ChatPage() {
                 strokeLinejoin="round"
                 strokeWidth={2}
                 d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowProfileSettings(true)}
+            className="p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors"
+            title={t.profileSettings.editProfile}
+          >
+            <svg
+              className="w-6 h-6"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M5.121 17.804A4 4 0 007 19h10a4 4 0 001.879-.475M15 11a3 3 0 11-6 0 3 3 0 016 0z"
               />
             </svg>
           </button>
@@ -570,10 +661,17 @@ export default function ChatPage() {
           )}
           <div className="flex-1 min-h-0">
             <ConversationList
+              workspaces={workspaces}
+              currentWorkspace={currentWorkspace}
+              currentUser={user}
+              currentMemberTag={currentMemberTag}
+              workspacesLoading={workspacesLoading}
               friends={friends}
               groups={groups}
               currentConversationId={currentConversationId}
               currentConversationType={currentConversationType}
+              onSelectWorkspace={(workspace) => selectWorkspace(workspace)}
+              onJoinWorkspace={() => openWorkspaceSwitcher('join')}
               onSelectConversation={setCurrentConversation}
             />
           </div>
@@ -583,16 +681,46 @@ export default function ChatPage() {
         <div
           className={`flex-1 min-h-0 ${hasActiveConversation ? 'flex' : 'hidden md:flex'}`}
         >
-          {conversation && user ? (
+          {!hasWorkspace ? (
+            <div className="h-full flex items-center justify-center bg-gray-50 text-gray-500">
+              <div className="text-center max-w-sm px-6">
+                <svg
+                  className="w-24 h-24 mx-auto mb-4 text-gray-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z"
+                  />
+                </svg>
+                <p className="text-lg font-medium">{t.chat.noWorkspaceTitle}</p>
+                <p className="text-sm mt-1">{t.chat.noWorkspaceSubtitle}</p>
+                <button
+                  type="button"
+                  onClick={() => openWorkspaceSwitcher('join')}
+                  className="mt-4 px-4 py-2 rounded-lg font-medium transition-colors hover:opacity-90"
+                  style={{ backgroundColor: 'var(--ws-primary)', color: 'var(--ws-primary-text)' }}
+                >
+                  {t.chat.joinWorkspace}
+                </button>
+              </div>
+            </div>
+          ) : conversation && user ? (
             <ChatWindow
               conversationName={conversation.name}
               conversationAvatar={conversation.avatar}
               messages={messages}
               currentUserId={user.id}
               onBack={() => setCurrentConversation(null, null)}
+              onOpenOptions={() => currentGroup && setShowGroupSettings(true)}
               onSendMessage={handleSendMessage}
               onFileUpload={handleFileUpload}
-              loading={sendingMessage}
+              loading={messagesLoading}
+              inputDisabled={sendingMessage}
               uploading={uploadingFile}
             />
           ) : (
@@ -620,21 +748,15 @@ export default function ChatPage() {
       </div>
 
       {/* Modals */}
-      {showWorkspaceSwitcher ? (
-        <>
-          {console.log('WorkspaceSwitcher should render now, showWorkspaceSwitcher:', showWorkspaceSwitcher)}
-          <WorkspaceSwitcher
-            workspaces={workspaces}
-            currentWorkspace={currentWorkspace}
-            onSelectWorkspace={setCurrentWorkspace}
-            onJoinWorkspace={handleJoinWorkspace}
-            onClose={toggleWorkspaceSwitcher}
-          />
-        </>
-      ) : (
-        <>
-          {console.log('WorkspaceSwitcher hidden, showWorkspaceSwitcher:', showWorkspaceSwitcher)}
-        </>
+      {showWorkspaceSwitcher && (
+        <WorkspaceSwitcher
+          workspaces={workspaces}
+          currentWorkspace={currentWorkspace}
+          onSelectWorkspace={selectWorkspace}
+          onJoinWorkspace={handleJoinWorkspace}
+          onClose={closeWorkspaceSwitcher}
+          initialShowJoinForm={workspaceSwitcherJoinMode}
+        />
       )}
 
       {showFriendList && (
@@ -675,6 +797,23 @@ export default function ChatPage() {
           maxGroupSize={maxGroupSize}
           onCreateGroup={handleCreateGroup}
           onClose={() => setShowCreateGroup(false)}
+        />
+      )}
+
+      {showGroupSettings && currentGroup && (
+        <GroupSettings
+          group={currentGroup}
+          onClose={() => setShowGroupSettings(false)}
+          onRename={handleRenameGroup}
+          onLeave={handleLeaveGroup}
+        />
+      )}
+
+      {showProfileSettings && user && (
+        <ProfileSettings
+          user={user}
+          onClose={() => setShowProfileSettings(false)}
+          onSave={handleUpdateProfile}
         />
       )}
     </div>

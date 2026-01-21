@@ -1,30 +1,43 @@
-import { PrismaClient } from '@prisma/client';
+import type { PrismaClient as NodePrismaClient } from '@prisma/client';
 import { PrismaD1 } from '@prisma/adapter-d1';
+import type { D1Database } from '@cloudflare/workers-types';
+import { getCloudflareEnv } from './cloudflare';
 
-let prisma: PrismaClient;
+type PrismaClient = NodePrismaClient;
 
-// For development (local SQLite)
-if (process.env.NODE_ENV !== 'production') {
+const isEdgeRuntime = typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'edge';
+
+async function getPrismaConstructor() {
+  const module = await import('@prisma/client');
+  return module.PrismaClient;
+}
+
+async function getNodePrisma(): Promise<NodePrismaClient> {
   const globalForPrisma = globalThis as unknown as {
-    prisma: PrismaClient | undefined;
+    prismaPromise: Promise<NodePrismaClient> | undefined;
   };
 
-  if (!globalForPrisma.prisma) {
-    globalForPrisma.prisma = new PrismaClient();
+  if (!globalForPrisma.prismaPromise) {
+    globalForPrisma.prismaPromise = getPrismaConstructor().then((PrismaClient) => new PrismaClient());
   }
-  prisma = globalForPrisma.prisma;
-} else {
-  // For production (Cloudflare D1)
-  // This will be initialized per-request with the D1 binding
-  prisma = new PrismaClient();
+
+  return globalForPrisma.prismaPromise;
 }
 
-export function getPrismaClient(d1?: D1Database): PrismaClient {
+export async function getPrismaClient(d1?: D1Database): Promise<PrismaClient> {
   if (d1) {
     const adapter = new PrismaD1(d1);
+    const PrismaClient = await getPrismaConstructor();
     return new PrismaClient({ adapter });
   }
-  return prisma;
+  if (isEdgeRuntime) {
+    throw new Error('D1 binding is required in edge runtime.');
+  }
+
+  return getNodePrisma();
 }
 
-export default prisma;
+export async function getPrismaClientFromContext(): Promise<PrismaClient> {
+  const env = getCloudflareEnv();
+  return getPrismaClient(env?.DB);
+}

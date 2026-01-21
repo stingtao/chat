@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
+import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyToken } from '@/lib/auth';
 
+export const runtime = 'edge';
+
 // Generate unique memberTag for workspace (4 digits)
-async function generateUniqueMemberTag(workspaceId: string): Promise<string> {
+async function generateUniqueMemberTag(
+  prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>,
+  workspaceId: string
+): Promise<string> {
   let attempts = 0;
   const maxAttempts = 100;
 
@@ -34,6 +39,7 @@ async function generateUniqueMemberTag(workspaceId: string): Promise<string> {
 // Join workspace with invite code
 export async function POST(request: NextRequest) {
   try {
+    const prisma = await getPrismaClientFromContext();
     const token = request.headers.get('authorization')?.replace('Bearer ', '');
     if (!token) {
       return NextResponse.json(
@@ -95,15 +101,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (existingMember) {
-      return NextResponse.json({
-        success: true,
-        data: workspace,
-      });
-    }
+  if (existingMember) {
+    return NextResponse.json({
+      success: true,
+      data: workspace,
+    });
+  }
 
-    // Generate unique memberTag
-    const memberTag = await generateUniqueMemberTag(workspace.id);
+  // Generate unique memberTag
+  const memberTag = await generateUniqueMemberTag(prisma, workspace.id);
 
     // Add as member
     await prisma.workspaceMember.create({

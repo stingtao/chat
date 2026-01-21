@@ -1,5 +1,3 @@
-import crypto from 'crypto';
-
 export interface OAuthProfile {
   id: string;
   email: string;
@@ -11,7 +9,13 @@ export interface OAuthProfile {
  * Generate random state for CSRF protection
  */
 export function generateState(): string {
-  return crypto.randomBytes(32).toString('hex');
+  const cryptoObj = globalThis.crypto;
+  if (!cryptoObj?.getRandomValues) {
+    throw new Error('Crypto not available');
+  }
+  const bytes = new Uint8Array(32);
+  cryptoObj.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
