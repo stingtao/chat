@@ -1,30 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { applyConversationStateMutations } from '@/lib/conversations';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { WSMessage } from '@/lib/types';
+import { parseConversationNotificationData } from '@/lib/utils';
+import { NotificationType } from '@/lib/notifications';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
+
+const FRIEND_USER_SELECT = {
+  id: true,
+  username: true,
+  avatar: true,
+  email: true,
+} as const;
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
+}
 
 // Send friend request
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { workspaceId, receiverId } = await request.json();
+    const { workspaceId, receiverId } = (await request.json()) as {
+      workspaceId?: string;
+      receiverId?: string;
+    };
 
     if (!workspaceId || !receiverId) {
       return NextResponse.json(
@@ -117,14 +131,25 @@ export async function POST(request: NextRequest) {
         status: 'pending',
       },
       include: {
+        sender: {
+          select: FRIEND_USER_SELECT,
+        },
         receiver: {
-          select: {
-            id: true,
-            username: true,
-            avatar: true,
-          },
+          select: FRIEND_USER_SELECT,
         },
       },
+    });
+
+    void broadcastWorkspaceEvent(workspaceId, {
+      type: 'friend_request',
+      payload: {
+        action: 'created',
+        workspaceId,
+        friendship,
+      },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast friend request error:', error);
     });
 
     return NextResponse.json({
@@ -144,16 +169,8 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
@@ -216,29 +233,226 @@ export async function GET(request: NextRequest) {
       f.senderId === payload.userId ? f.receiverId : f.senderId
     );
 
-    const workspaceMembers = await prisma.workspaceMember.findMany({
-      where: {
-        workspaceId,
-        userId: { in: friendIds },
-      },
-      select: {
-        userId: true,
-        lastSeenAt: true,
-      },
-    });
+    const [workspaceMembers, conversationStates] = await Promise.all([
+      prisma.workspaceMember.findMany({
+        where: {
+          workspaceId,
+          userId: { in: friendIds },
+        },
+        select: {
+          userId: true,
+          lastSeenAt: true,
+        },
+      }),
+      friendIds.length > 0
+        ? prisma.conversationState.findMany({
+            where: {
+              workspaceId,
+              userId: payload.userId,
+              conversationType: 'direct',
+              conversationId: { in: friendIds },
+            },
+            select: {
+              conversationId: true,
+              unreadCount: true,
+              lastMessageId: true,
+              lastMessageAt: true,
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const stateByFriendId = new Map(
+      conversationStates.map((state) => [state.conversationId, state])
+    );
+    const lastMessageIds = Array.from(
+      new Set(
+        conversationStates
+          .map((state) => state.lastMessageId)
+          .filter((lastMessageId): lastMessageId is string => Boolean(lastMessageId))
+      )
+    );
+
+    const lastMessages = lastMessageIds.length > 0
+      ? await prisma.message.findMany({
+        select: {
+          id: true,
+          workspaceId: true,
+          senderId: true,
+          groupId: true,
+          receiverId: true,
+          content: true,
+          type: true,
+          fileUrl: true,
+          readBy: true,
+          createdAt: true,
+          updatedAt: true,
+          sender: {
+            select: {
+              id: true,
+              username: true,
+              avatar: true,
+            },
+          },
+        },
+        where: {
+          id: { in: lastMessageIds },
+        },
+      })
+      : [];
 
     const lastSeenMap = new Map(
       workspaceMembers.map(m => [m.userId, m.lastSeenAt])
     );
 
+    const lastMessageById = new Map(
+      lastMessages.map((message) => [
+        message.id,
+        {
+          ...message,
+          senderName: message.sender?.username,
+          senderAvatar: message.sender?.avatar,
+        },
+      ])
+    );
+    const lastMessageByFriendId = new Map<string, Record<string, unknown>>();
+
+    for (const state of conversationStates) {
+      if (!state.lastMessageId) {
+        continue;
+      }
+
+      const lastMessage = lastMessageById.get(state.lastMessageId);
+      if (lastMessage) {
+        lastMessageByFriendId.set(state.conversationId, lastMessage);
+      }
+    }
+
+    const missingStateFriendIds = friendIds.filter((friendId) => {
+      const state = stateByFriendId.get(friendId);
+      if (!state) {
+        return true;
+      }
+
+      if (!state.lastMessageId) {
+        return false;
+      }
+
+      return !lastMessageById.has(state.lastMessageId);
+    });
+
+    if (missingStateFriendIds.length > 0) {
+      const missingStateFriendIdSet = new Set(missingStateFriendIds);
+      const [legacyUnreadNotifications, fallbackLastMessages] = await Promise.all([
+        prisma.notification.findMany({
+          where: {
+            userId: payload.userId,
+            workspaceId,
+            type: NotificationType.MESSAGE,
+            isRead: false,
+          },
+          select: {
+            data: true,
+          },
+        }),
+        Promise.all(
+          missingStateFriendIds.map((friendId) =>
+            prisma.message.findFirst({
+              where: {
+                workspaceId,
+                OR: [
+                  { senderId: payload.userId, receiverId: friendId },
+                  { senderId: friendId, receiverId: payload.userId },
+                ],
+              },
+              include: {
+                sender: {
+                  select: {
+                    id: true,
+                    username: true,
+                    avatar: true,
+                  },
+                },
+              },
+              orderBy: {
+                createdAt: 'desc',
+              },
+            })
+          )
+        ),
+      ]);
+
+      const legacyUnreadCountByFriendId = new Map<string, number>();
+      for (const notification of legacyUnreadNotifications) {
+        const data = parseConversationNotificationData(notification.data);
+        if (
+          !data?.conversationId ||
+          data.conversationType !== 'direct' ||
+          !missingStateFriendIdSet.has(data.conversationId)
+        ) {
+          continue;
+        }
+
+        legacyUnreadCountByFriendId.set(
+          data.conversationId,
+          (legacyUnreadCountByFriendId.get(data.conversationId) || 0) + 1
+        );
+      }
+
+      const seedMutations = missingStateFriendIds.flatMap((friendId, index) => {
+        const existingState = stateByFriendId.get(friendId);
+        const fallbackMessage = fallbackLastMessages[index];
+
+        if (fallbackMessage) {
+          lastMessageByFriendId.set(friendId, {
+            ...fallbackMessage,
+            senderName: fallbackMessage.sender?.username,
+            senderAvatar: fallbackMessage.sender?.avatar,
+          });
+        }
+
+        const unreadCount = existingState
+          ? existingState.unreadCount
+          : legacyUnreadCountByFriendId.get(friendId) || 0;
+
+        if (!existingState && !fallbackMessage && unreadCount === 0) {
+          return [];
+        }
+
+        stateByFriendId.set(friendId, {
+          conversationId: friendId,
+          unreadCount,
+          lastMessageId: fallbackMessage?.id || existingState?.lastMessageId || null,
+          lastMessageAt: fallbackMessage?.createdAt || existingState?.lastMessageAt || null,
+        });
+
+        return [
+          {
+            workspaceId,
+            userId: payload.userId,
+            conversationType: 'direct' as const,
+            conversationId: friendId,
+            lastMessageId: fallbackMessage?.id || existingState?.lastMessageId,
+            lastMessageAt: fallbackMessage?.createdAt || existingState?.lastMessageAt,
+            incrementUnreadBy: existingState ? 0 : unreadCount,
+          },
+        ];
+      });
+
+      await applyConversationStateMutations(prisma, seedMutations);
+    }
+
     const friends = friendships.map(f => {
       const friend = f.senderId === payload.userId ? f.receiver : f.sender;
+      const conversationState = stateByFriendId.get(friend.id);
       return {
         ...f,
         friend: {
           ...friend,
           lastSeenAt: lastSeenMap.get(friend.id),
         },
+        lastMessage: lastMessageByFriendId.get(friend.id),
+        unreadCount: conversationState?.unreadCount || 0,
       };
     });
 
@@ -259,23 +473,18 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { friendshipId, status } = await request.json();
+    const { friendshipId, status } = (await request.json()) as {
+      friendshipId?: string;
+      status?: 'accepted' | 'rejected';
+    };
 
     if (!friendshipId || !status) {
       return NextResponse.json(
@@ -284,24 +493,71 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const friendship = await prisma.friendship.updateMany({
+    const existingFriendship = await prisma.friendship.findFirst({
       where: {
         id: friendshipId,
         receiverId: payload.userId,
       },
-      data: { status },
+      include: {
+        sender: {
+          select: FRIEND_USER_SELECT,
+        },
+        receiver: {
+          select: FRIEND_USER_SELECT,
+        },
+      },
     });
 
-    if (friendship.count === 0) {
+    if (!existingFriendship) {
       return NextResponse.json(
         { success: false, error: 'Friend request not found' },
         { status: 404 }
       );
     }
 
+    if (existingFriendship.status !== 'pending') {
+      return NextResponse.json(
+        { success: false, error: 'Friend request has already been handled' },
+        { status: 409 }
+      );
+    }
+
+    const friendship = await prisma.friendship.update({
+      where: {
+        id: friendshipId,
+      },
+      data: { status },
+      include: {
+        sender: {
+          select: FRIEND_USER_SELECT,
+        },
+        receiver: {
+          select: FRIEND_USER_SELECT,
+        },
+      },
+    });
+
+    void broadcastWorkspaceEvent(friendship.workspaceId, {
+      type: status === 'accepted' ? 'friend_accepted' : 'friend_request',
+      payload:
+        status === 'accepted'
+          ? {
+              workspaceId: friendship.workspaceId,
+              friendship,
+            }
+          : {
+              action: 'rejected',
+              workspaceId: friendship.workspaceId,
+              friendship,
+            },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast friend request update error:', error);
+    });
+
     return NextResponse.json({
       success: true,
-      data: { id: friendshipId, status },
+      data: friendship,
     });
   } catch (error) {
     console.error('Update friend request error:', error);

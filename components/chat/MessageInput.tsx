@@ -26,6 +26,7 @@ export default function MessageInput({
   const lang = useLang();
   const t = getTranslations(lang);
   const resolvedPlaceholder = placeholder || t.messageInput.placeholder;
+  const MAX_MESSAGE_LENGTH = 4000;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,6 +103,7 @@ export default function MessageInput({
           }}
           onKeyDown={handleKeyDown}
           placeholder={resolvedPlaceholder}
+          maxLength={MAX_MESSAGE_LENGTH}
           disabled={disabled}
           className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-[var(--ws-primary)] focus:border-transparent disabled:bg-gray-100 text-gray-900 placeholder-gray-400"
         />

@@ -1,30 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { WSMessage } from '@/lib/types';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
+}
 
 // Create a spam report
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { workspaceId, messageId, reason } = await request.json();
+    const { workspaceId, messageId, reason } = (await request.json()) as {
+      workspaceId?: string;
+      messageId?: string;
+      reason?: string;
+    };
     const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
 
     if (!workspaceId || !messageId || !trimmedReason) {
@@ -85,6 +90,27 @@ export async function POST(request: NextRequest) {
         reason: trimmedReason,
         status: 'pending',
       },
+      include: {
+        reporter: {
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    void broadcastWorkspaceEvent(workspaceId, {
+      type: 'spam_report_created',
+      payload: {
+        workspaceId,
+        report,
+      },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast spam report create error:', error);
     });
 
     return NextResponse.json({

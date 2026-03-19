@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ClientUser, Workspace, Message, Friendship, Group } from '@/lib/types';
+import { appendReadByUser, mergeMessagesById } from '@/lib/utils';
 
 interface ChatStore {
   // User & Auth
@@ -21,16 +22,18 @@ interface ChatStore {
 
   // Messages
   messages: Message[];
-  setMessages: (messages: Message[]) => void;
+  setMessages: (messages: Message[] | ((messages: Message[]) => Message[])) => void;
   addMessage: (message: Message) => void;
+  mergeMessages: (messages: Message[]) => void;
+  markMessagesRead: (messageIds: string[], userId: string) => void;
 
   // Friends
   friends: Friendship[];
-  setFriends: (friends: Friendship[]) => void;
+  setFriends: (friends: Friendship[] | ((friends: Friendship[]) => Friendship[])) => void;
 
   // Groups
   groups: Group[];
-  setGroups: (groups: Group[]) => void;
+  setGroups: (groups: Group[] | ((groups: Group[]) => Group[])) => void;
 
   // UI State
   showWorkspaceSwitcher: boolean;
@@ -63,11 +66,37 @@ export const useChatStore = create<ChatStore>((set) => ({
   setWorkspaces: (workspaces) => set({ workspaces }),
   setCurrentConversation: (id, type) =>
     set({ currentConversationId: id, currentConversationType: type }),
-  setMessages: (messages) => set({ messages }),
+  setMessages: (messages) =>
+    set((state) => ({
+      messages: typeof messages === 'function' ? messages(state.messages) : messages,
+    })),
   addMessage: (message) =>
-    set((state) => ({ messages: [...state.messages, message] })),
-  setFriends: (friends) => set({ friends }),
-  setGroups: (groups) => set({ groups }),
+    set((state) => ({ messages: mergeMessagesById(state.messages, message) })),
+  mergeMessages: (messages) =>
+    set((state) => ({ messages: mergeMessagesById(state.messages, messages) })),
+  markMessagesRead: (messageIds, userId) =>
+    set((state) => {
+      if (messageIds.length === 0) {
+        return { messages: state.messages };
+      }
+
+      const messageIdSet = new Set(messageIds);
+      return {
+        messages: state.messages.map((message) =>
+          messageIdSet.has(message.id)
+            ? { ...message, readBy: appendReadByUser(message.readBy, userId) }
+            : message
+        ),
+      };
+    }),
+  setFriends: (friends) =>
+    set((state) => ({
+      friends: typeof friends === 'function' ? friends(state.friends) : friends,
+    })),
+  setGroups: (groups) =>
+    set((state) => ({
+      groups: typeof groups === 'function' ? groups(state.groups) : groups,
+    })),
   toggleWorkspaceSwitcher: () =>
     set((state) => ({ showWorkspaceSwitcher: !state.showWorkspaceSwitcher })),
   toggleFriendList: () =>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { api } from '@/lib/api';
+import { toDate } from '@/lib/utils';
 
 export function useMessagePolling(intervalMs: number = 3000, enabled: boolean = true) {
   const {
@@ -8,38 +9,38 @@ export function useMessagePolling(intervalMs: number = 3000, enabled: boolean = 
     currentConversationId,
     currentConversationType,
     messages,
-    setMessages,
+    mergeMessages,
   } = useChatStore();
 
-  const lastMessageIdRef = useRef<string | null>(null);
+  const lastMessageAtRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!enabled || !currentWorkspace || !currentConversationId) return;
+    const lastMessage = messages[messages.length - 1];
+    lastMessageAtRef.current = lastMessage
+      ? toDate(lastMessage.createdAt)?.toISOString() || null
+      : null;
+  }, [messages]);
 
-    // Update last message ID when messages change
-    if (messages.length > 0) {
-      lastMessageIdRef.current = messages[messages.length - 1].id;
+  useEffect(() => {
+    if (!enabled || !currentWorkspace || !currentConversationId || !currentConversationType) {
+      return;
     }
 
     const pollMessages = async () => {
       try {
-        const response = await api.getMessages(
-          currentWorkspace.id,
-          currentConversationType === 'direct' ? currentConversationId : undefined,
-          currentConversationType === 'group' ? currentConversationId : undefined
-        );
+        const response = await api.getMessagesIncremental({
+          workspaceId: currentWorkspace.id,
+          receiverId: currentConversationType === 'direct' ? currentConversationId : undefined,
+          groupId: currentConversationType === 'group' ? currentConversationId : undefined,
+          after: lastMessageAtRef.current || undefined,
+          limit: 100,
+          markRead: true,
+        });
 
         if (response.success && response.data) {
           const newMessages = response.data;
-
-          // Only update if there are new messages
-          if (newMessages.length > messages.length) {
-            setMessages(newMessages);
-          } else if (newMessages.length > 0) {
-            const lastNewId = newMessages[newMessages.length - 1].id;
-            if (lastNewId !== lastMessageIdRef.current) {
-              setMessages(newMessages);
-            }
+          if (newMessages.length > 0) {
+            mergeMessages(newMessages);
           }
         }
       } catch (error) {
@@ -47,8 +48,16 @@ export function useMessagePolling(intervalMs: number = 3000, enabled: boolean = 
       }
     };
 
+    void pollMessages();
     const interval = setInterval(pollMessages, intervalMs);
 
     return () => clearInterval(interval);
-  }, [enabled, currentWorkspace, currentConversationId, currentConversationType, messages.length, intervalMs]);
+  }, [
+    enabled,
+    currentWorkspace?.id,
+    currentConversationId,
+    currentConversationType,
+    intervalMs,
+    mergeMessages,
+  ]);
 }

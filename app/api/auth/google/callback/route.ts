@@ -3,6 +3,8 @@ import { getPrismaClientFromContext } from '@/lib/db';
 import { GoogleOAuth, verifyState, mergeAuthProviders } from '@/lib/oauth';
 import { generateToken } from '@/lib/auth';
 import { normalizeLang } from '@/lib/i18n';
+import { applySessionCookie } from '@/lib/session';
+import { generateRandomString } from '@/lib/utils';
 
 export const runtime = 'edge';
 
@@ -126,7 +128,7 @@ export async function GET(request: NextRequest) {
       } else {
         // Create new client user
         // Generate username from email
-        const username = profile.email.split('@')[0] + Math.random().toString(36).substring(2, 6);
+        const username = `${profile.email.split('@')[0]}${generateRandomString(4)}`;
 
         client = await prisma.user.create({
           data: {
@@ -155,10 +157,22 @@ export async function GET(request: NextRequest) {
       };
     }
 
-    // Redirect to frontend with token
-    const redirectUrl = userType === 'host' ? '/host/dashboard' : '/client/chat';
-
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || '';
+    if (userType === 'client' || userType === 'host') {
+      const redirectUrl = new URL(
+        userType === 'client' ? '/client/chat' : '/host/dashboard',
+        appUrl || request.nextUrl.origin
+      );
+      if (lang) {
+        redirectUrl.searchParams.set('lang', lang);
+      }
+
+      const response = NextResponse.redirect(redirectUrl);
+      applySessionCookie(response, userType, token);
+      response.cookies.delete('oauth_state');
+      return response;
+    }
+
     const redirectParams = new URLSearchParams({
       token,
       user: JSON.stringify(user),
@@ -167,6 +181,7 @@ export async function GET(request: NextRequest) {
       redirectParams.set('lang', lang);
     }
 
+    const redirectUrl = '/host/dashboard';
     const response = NextResponse.redirect(
       `${appUrl}${redirectUrl}?${redirectParams.toString()}`
     );

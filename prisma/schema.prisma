@@ -43,6 +43,7 @@ model Workspace {
   host            Host              @relation(fields: [hostId], references: [id], onDelete: Cascade)
   members         WorkspaceMember[]
   messages        Message[]
+  conversationStates ConversationState[]
   groups          Group[]
   blockedUsers    BlockedUser[]
   spamReports     SpamReport[]
@@ -94,6 +95,7 @@ model User {
   spamReports       SpamReport[]
   deviceTokens      DeviceToken[]
   notifications     Notification[]
+  conversationStates ConversationState[]
 
   @@index([email])
   @@index([username])
@@ -163,6 +165,29 @@ model Message {
   @@index([groupId])
   @@index([receiverId])
   @@index([createdAt])
+}
+
+// Per-user conversation read state for inbox ordering and unread counts
+model ConversationState {
+  id                String    @id @default(uuid())
+  workspaceId       String
+  userId            String
+  conversationType  String    // direct, group
+  conversationId    String
+  lastMessageId     String?
+  lastMessageAt     DateTime?
+  lastReadMessageId String?
+  lastReadAt        DateTime?
+  unreadCount       Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId, conversationType, conversationId], name: "conversation_lookup")
+  @@index([workspaceId, userId, conversationType])
+  @@index([workspaceId, userId, lastMessageAt])
 }
 
 // Group chats

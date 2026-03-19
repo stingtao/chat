@@ -1,36 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
 
 // Get workspace members (for client to see and add friends)
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+    const { id } = await params;
 
     // Verify user is a member of this workspace
     const membership = await prisma.workspaceMember.findFirst({
       where: {
-        workspaceId: params.id,
+        workspaceId: id,
         userId: payload.userId,
       },
     });
@@ -44,7 +38,7 @@ export async function GET(
 
     // Get all members
     const members = await prisma.workspaceMember.findMany({
-      where: { workspaceId: params.id },
+      where: { workspaceId: id },
       include: {
         user: {
           select: {

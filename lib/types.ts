@@ -10,6 +10,7 @@ export interface ClientUser {
   email: string;
   username: string;
   avatar?: string;
+  isOnline?: boolean;
   lastSeenAt?: Date | string;
 }
 
@@ -54,7 +55,7 @@ export interface Message {
   content: string;
   type: 'text' | 'image' | 'file' | 'system';
   fileUrl?: string;
-  readBy: string[];
+  readBy: string[] | string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -68,6 +69,7 @@ export interface Group {
   createdById: string;
   memberCount?: number;
   lastMessage?: Message;
+  unreadCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -82,8 +84,72 @@ export interface Friendship {
   friend?: ClientUser;
   sender?: ClientUser;
   receiver?: ClientUser;
+  lastMessage?: Message;
+  unreadCount?: number;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface FriendRequestEventPayload {
+  action: 'created' | 'rejected';
+  workspaceId: string;
+  friendship: Friendship;
+}
+
+export interface FriendAcceptedEventPayload {
+  workspaceId: string;
+  friendship: Friendship;
+}
+
+export interface GroupRealtimeEventPayload {
+  action: 'created' | 'renamed' | 'membership_changed';
+  workspaceId: string;
+  group: Group;
+  memberIds: string[];
+}
+
+export interface GroupDeletedEventPayload {
+  workspaceId: string;
+  groupId: string;
+}
+
+export interface WorkspaceMemberJoinedEventPayload {
+  workspaceId: string;
+  member: WorkspaceMember;
+}
+
+export interface WorkspaceMemberRemovedEventPayload {
+  workspaceId: string;
+  userId: string;
+}
+
+export interface WorkspaceMemberUpdatedEventPayload {
+  workspaceId: string;
+  member: WorkspaceMember;
+}
+
+export interface SpamReportRealtimeEventPayload {
+  workspaceId: string;
+  report: SpamReport;
+}
+
+export interface BlockedUser {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  reason?: string | null;
+  blockedAt: Date | string;
+  user?: ClientUser;
+}
+
+export interface WorkspaceMemberBlockedEventPayload {
+  workspaceId: string;
+  blockedUser: BlockedUser;
+}
+
+export interface WorkspaceMemberUnblockedEventPayload {
+  workspaceId: string;
+  userId: string;
 }
 
 // Workspace member types
@@ -95,7 +161,7 @@ export interface WorkspaceMember {
   role: 'member' | 'admin';
   user?: ClientUser;
   joinedAt: Date;
-  lastSeenAt: Date;
+  lastSeenAt: Date | string;
 }
 
 // Spam report types
@@ -127,7 +193,17 @@ export type WSMessageType =
   | 'typing_start'
   | 'typing_stop'
   | 'friend_request'
-  | 'friend_accepted';
+  | 'friend_accepted'
+  | 'group_created'
+  | 'group_updated'
+  | 'group_deleted'
+  | 'workspace_member_joined'
+  | 'workspace_member_removed'
+  | 'workspace_member_updated'
+  | 'spam_report_created'
+  | 'spam_report_updated'
+  | 'workspace_member_blocked'
+  | 'workspace_member_unblocked';
 
 export interface WSMessage {
   type: WSMessageType;

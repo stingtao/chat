@@ -6,7 +6,7 @@ import type { WSMessage } from '../lib/types';
 
 export class ChatRoom {
   private state: DurableObjectState;
-  private sessions: Map<string, WebSocket>;
+  private sessions: Map<string, Set<WebSocket>>;
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -25,22 +25,38 @@ export class ChatRoom {
       const server = pair[1];
 
       server.accept();
-      this.sessions.set(userId, server);
+      const existingSessions = this.sessions.get(userId);
+      const nextSessions = existingSessions || new Set<WebSocket>();
+      const wasOffline = nextSessions.size === 0;
+      nextSessions.add(server);
+      this.sessions.set(userId, nextSessions);
 
-      this.broadcast(
-        {
-          type: 'user_online',
-          payload: { userId },
-          timestamp: Date.now(),
-        },
-        userId
-      );
+      if (wasOffline) {
+        this.broadcast(
+          {
+            type: 'user_online',
+            payload: { userId },
+            timestamp: Date.now(),
+          },
+          userId
+        );
+      }
 
       server.addEventListener('message', (event) => {
         this.handleClientMessage(userId, event.data);
       });
 
       const cleanup = () => {
+        const userSessions = this.sessions.get(userId);
+        if (!userSessions) {
+          return;
+        }
+
+        userSessions.delete(server);
+        if (userSessions.size > 0) {
+          return;
+        }
+
         this.sessions.delete(userId);
         this.broadcast(
           {
@@ -96,10 +112,12 @@ export class ChatRoom {
 
   private broadcast(message: WSMessage, excludeUserId?: string) {
     const payload = JSON.stringify(message);
-    for (const [userId, socket] of this.sessions.entries()) {
+    for (const [userId, sockets] of this.sessions.entries()) {
       if (excludeUserId && userId === excludeUserId) continue;
-      if (socket.readyState !== WebSocket.OPEN) continue;
-      socket.send(payload);
+      for (const socket of sockets) {
+        if (socket.readyState !== WebSocket.OPEN) continue;
+        socket.send(payload);
+      }
     }
   }
 }

@@ -1,23 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { applyConversationStateMutations } from '@/lib/conversations';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { GroupRealtimeEventPayload, WSMessage } from '@/lib/types';
+import {
+  normalizeTextInput,
+  parseConversationNotificationData,
+} from '@/lib/utils';
+import { NotificationType } from '@/lib/notifications';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
+
+const MAX_GROUP_NAME_LENGTH = 80;
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
+}
+
+async function loadGroupRealtimeSnapshot(
+  prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>,
+  groupId: string
+) {
+  const group = await prisma.group.findUnique({
+    where: { id: groupId },
+    include: {
+      _count: {
+        select: { members: true },
+      },
+      members: {
+        select: { userId: true },
+        orderBy: { joinedAt: 'asc' },
+      },
+    },
+  });
+
+  if (!group) {
+    return null;
+  }
+
+  const { _count, members, ...groupData } = group;
+  return {
+    group: {
+      ...groupData,
+      memberCount: _count.members,
+    },
+    memberIds: members.map((member) => member.userId),
+  };
+}
+
+async function broadcastGroupRealtimeEvent(options: {
+  prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>;
+  workspaceId: string;
+  groupId: string;
+  type: 'group_created' | 'group_updated';
+  action: GroupRealtimeEventPayload['action'];
+}) {
+  const snapshot = await loadGroupRealtimeSnapshot(options.prisma, options.groupId);
+  if (!snapshot) {
+    return null;
+  }
+
+  await broadcastWorkspaceEvent(options.workspaceId, {
+    type: options.type,
+    payload: {
+      action: options.action,
+      workspaceId: options.workspaceId,
+      group: snapshot.group,
+      memberIds: snapshot.memberIds,
+    },
+    timestamp: Date.now(),
+  });
+
+  return snapshot;
+}
 
 // Get user's groups in a workspace
 export async function GET(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
@@ -50,7 +116,12 @@ export async function GET(request: NextRequest) {
 
     // Get groups user is a member of
     const groupMemberships = await prisma.groupMember.findMany({
-      where: { userId: payload.userId },
+      where: {
+        userId: payload.userId,
+        group: {
+          workspaceId,
+        },
+      },
       include: {
         group: {
           include: {
@@ -62,12 +133,204 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const groups = groupMemberships
-      .filter((gm) => gm.group.workspaceId === workspaceId)
-      .map((gm) => ({
+    const groupIds = groupMemberships.map((membership) => membership.group.id);
+    const conversationStates = groupIds.length > 0
+      ? await prisma.conversationState.findMany({
+          where: {
+            workspaceId,
+            userId: payload.userId,
+            conversationType: 'group',
+            conversationId: { in: groupIds },
+          },
+          select: {
+            conversationId: true,
+            unreadCount: true,
+            lastMessageId: true,
+            lastMessageAt: true,
+          },
+        })
+      : [];
+
+    const stateByGroupId = new Map(
+      conversationStates.map((state) => [state.conversationId, state])
+    );
+    const lastMessageIds = Array.from(
+      new Set(
+        conversationStates
+          .map((state) => state.lastMessageId)
+          .filter((lastMessageId): lastMessageId is string => Boolean(lastMessageId))
+      )
+    );
+    const lastMessages = lastMessageIds.length > 0
+      ? await prisma.message.findMany({
+          select: {
+            id: true,
+            workspaceId: true,
+            senderId: true,
+            groupId: true,
+            receiverId: true,
+            content: true,
+            type: true,
+            fileUrl: true,
+            readBy: true,
+            createdAt: true,
+            updatedAt: true,
+            sender: {
+              select: {
+                id: true,
+                username: true,
+                avatar: true,
+              },
+            },
+          },
+          where: {
+            id: { in: lastMessageIds },
+          },
+        })
+      : [];
+
+    const lastMessageById = new Map(
+      lastMessages.map((message) => [
+        message.id,
+        {
+          ...message,
+          senderName: message.sender?.username,
+          senderAvatar: message.sender?.avatar,
+        },
+      ])
+    );
+    const lastMessageByGroupId = new Map<string, Record<string, unknown>>();
+    for (const state of conversationStates) {
+      if (!state.lastMessageId) {
+        continue;
+      }
+
+      const lastMessage = lastMessageById.get(state.lastMessageId);
+      if (lastMessage) {
+        lastMessageByGroupId.set(state.conversationId, lastMessage);
+      }
+    }
+
+    const missingStateGroupIds = groupIds.filter((groupId) => {
+      const state = stateByGroupId.get(groupId);
+      if (!state) {
+        return true;
+      }
+
+      if (!state.lastMessageId) {
+        return false;
+      }
+
+      return !lastMessageById.has(state.lastMessageId);
+    });
+
+    if (missingStateGroupIds.length > 0) {
+      const missingStateGroupIdSet = new Set(missingStateGroupIds);
+      const [legacyUnreadNotifications, fallbackLastMessages] = await Promise.all([
+        prisma.notification.findMany({
+          where: {
+            userId: payload.userId,
+            workspaceId,
+            type: NotificationType.MESSAGE,
+            isRead: false,
+          },
+          select: {
+            data: true,
+          },
+        }),
+        Promise.all(
+          missingStateGroupIds.map((conversationId) =>
+            prisma.message.findFirst({
+              where: {
+                workspaceId,
+                groupId: conversationId,
+              },
+              include: {
+                sender: {
+                  select: {
+                    id: true,
+                    username: true,
+                    avatar: true,
+                  },
+                },
+              },
+              orderBy: {
+                createdAt: 'desc',
+              },
+            })
+          )
+        ),
+      ]);
+
+      const legacyUnreadCountByGroupId = new Map<string, number>();
+      for (const notification of legacyUnreadNotifications) {
+        const data = parseConversationNotificationData(notification.data);
+        if (
+          !data?.conversationId ||
+          data.conversationType !== 'group' ||
+          !missingStateGroupIdSet.has(data.conversationId)
+        ) {
+          continue;
+        }
+
+        legacyUnreadCountByGroupId.set(
+          data.conversationId,
+          (legacyUnreadCountByGroupId.get(data.conversationId) || 0) + 1
+        );
+      }
+
+      const seedMutations = missingStateGroupIds.flatMap((groupId, index) => {
+        const existingState = stateByGroupId.get(groupId);
+        const fallbackMessage = fallbackLastMessages[index];
+
+        if (fallbackMessage) {
+          lastMessageByGroupId.set(groupId, {
+            ...fallbackMessage,
+            senderName: fallbackMessage.sender?.username,
+            senderAvatar: fallbackMessage.sender?.avatar,
+          });
+        }
+
+        const unreadCount = existingState
+          ? existingState.unreadCount
+          : legacyUnreadCountByGroupId.get(groupId) || 0;
+
+        if (!existingState && !fallbackMessage && unreadCount === 0) {
+          return [];
+        }
+
+        stateByGroupId.set(groupId, {
+          conversationId: groupId,
+          unreadCount,
+          lastMessageId: fallbackMessage?.id || existingState?.lastMessageId || null,
+          lastMessageAt: fallbackMessage?.createdAt || existingState?.lastMessageAt || null,
+        });
+
+        return [
+          {
+            workspaceId,
+            userId: payload.userId,
+            conversationType: 'group' as const,
+            conversationId: groupId,
+            lastMessageId: fallbackMessage?.id || existingState?.lastMessageId,
+            lastMessageAt: fallbackMessage?.createdAt || existingState?.lastMessageAt,
+            incrementUnreadBy: existingState ? 0 : unreadCount,
+          },
+        ];
+      });
+
+      await applyConversationStateMutations(prisma, seedMutations);
+    }
+
+    const groups = groupMemberships.map((gm) => {
+      const conversationState = stateByGroupId.get(gm.group.id);
+      return {
         ...gm.group,
         memberCount: gm.group._count.members,
-      }));
+        lastMessage: lastMessageByGroupId.get(gm.group.id),
+        unreadCount: conversationState?.unreadCount || 0,
+      };
+    });
 
     return NextResponse.json({
       success: true,
@@ -86,28 +349,30 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { workspaceId, name, memberIds } = await request.json();
-
-    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    const { workspaceId, name, memberIds } = (await request.json()) as {
+      workspaceId?: string;
+      name?: string;
+      memberIds?: string[];
+    };
+    const trimmedName = normalizeTextInput(name, { maxLength: MAX_GROUP_NAME_LENGTH });
     if (!workspaceId || !trimmedName) {
       return NextResponse.json(
         { success: false, error: 'Workspace ID and name are required' },
+        { status: 400 }
+      );
+    }
+
+    if (typeof name === 'string' && name.trim().length > MAX_GROUP_NAME_LENGTH) {
+      return NextResponse.json(
+        { success: false, error: `Group name must be ${MAX_GROUP_NAME_LENGTH} characters or fewer` },
         { status: 400 }
       );
     }
@@ -175,7 +440,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create group
-    const group = await prisma.group.create({
+    const createdGroup = await prisma.group.create({
       data: {
         workspaceId,
         name: trimmedName,
@@ -195,19 +460,32 @@ export async function POST(request: NextRequest) {
           ],
         },
       },
-      include: {
-        _count: {
-          select: { members: true },
-        },
+    });
+
+    const groupSnapshot = await loadGroupRealtimeSnapshot(prisma, createdGroup.id);
+    if (!groupSnapshot) {
+      return NextResponse.json(
+        { success: false, error: 'Failed to load group summary' },
+        { status: 500 }
+      );
+    }
+
+    void broadcastWorkspaceEvent(workspaceId, {
+      type: 'group_created',
+      payload: {
+        action: 'created',
+        workspaceId,
+        group: groupSnapshot.group,
+        memberIds: groupSnapshot.memberIds,
       },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast group create error:', error);
     });
 
     return NextResponse.json({
       success: true,
-      data: {
-        ...group,
-        memberCount: group._count.members,
-      },
+      data: groupSnapshot.group,
     });
   } catch (error) {
     console.error('Create group error:', error);
@@ -222,28 +500,31 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { workspaceId, groupId, name } = await request.json();
-    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    const { workspaceId, groupId, name } = (await request.json()) as {
+      workspaceId?: string;
+      groupId?: string;
+      name?: string;
+    };
+    const trimmedName = normalizeTextInput(name, { maxLength: MAX_GROUP_NAME_LENGTH });
 
     if (!workspaceId || !groupId || !trimmedName) {
       return NextResponse.json(
         { success: false, error: 'Workspace ID, group ID, and name are required' },
+        { status: 400 }
+      );
+    }
+
+    if (typeof name === 'string' && name.trim().length > MAX_GROUP_NAME_LENGTH) {
+      return NextResponse.json(
+        { success: false, error: `Group name must be ${MAX_GROUP_NAME_LENGTH} characters or fewer` },
         { status: 400 }
       );
     }
@@ -290,22 +571,35 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const updatedGroup = await prisma.group.update({
+    await prisma.group.update({
       where: { id: groupId },
       data: { name: trimmedName },
-      include: {
-        _count: {
-          select: { members: true },
-        },
+    });
+
+    const groupSnapshot = await loadGroupRealtimeSnapshot(prisma, groupId);
+    if (!groupSnapshot) {
+      return NextResponse.json(
+        { success: false, error: 'Group not found' },
+        { status: 404 }
+      );
+    }
+
+    void broadcastWorkspaceEvent(workspaceId, {
+      type: 'group_updated',
+      payload: {
+        action: 'renamed',
+        workspaceId,
+        group: groupSnapshot.group,
+        memberIds: groupSnapshot.memberIds,
       },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast group rename error:', error);
     });
 
     return NextResponse.json({
       success: true,
-      data: {
-        ...updatedGroup,
-        memberCount: updatedGroup._count.members,
-      },
+      data: groupSnapshot.group,
     });
   } catch (error) {
     console.error('Rename group error:', error);
@@ -320,23 +614,18 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { workspaceId, groupId } = await request.json();
+    const { workspaceId, groupId } = (await request.json()) as {
+      workspaceId?: string;
+      groupId?: string;
+    };
 
     if (!workspaceId || !groupId) {
       return NextResponse.json(
@@ -390,6 +679,14 @@ export async function DELETE(request: NextRequest) {
     await prisma.groupMember.delete({
       where: { id: groupMember.id },
     });
+    await prisma.conversationState.deleteMany({
+      where: {
+        workspaceId,
+        userId: payload.userId,
+        conversationType: 'group',
+        conversationId: groupId,
+      },
+    });
 
     const remainingMembers = await prisma.groupMember.findMany({
       where: { groupId },
@@ -397,7 +694,26 @@ export async function DELETE(request: NextRequest) {
     });
 
     if (remainingMembers.length === 0) {
+      await prisma.conversationState.deleteMany({
+        where: {
+          workspaceId,
+          conversationType: 'group',
+          conversationId: groupId,
+        },
+      });
       await prisma.group.delete({ where: { id: groupId } });
+
+      void broadcastWorkspaceEvent(workspaceId, {
+        type: 'group_deleted',
+        payload: {
+          workspaceId,
+          groupId,
+        },
+        timestamp: Date.now(),
+      }).catch((error) => {
+        console.error('Broadcast group delete error:', error);
+      });
+
       return NextResponse.json({
         success: true,
         data: { groupId, deleted: true },
@@ -412,6 +728,16 @@ export async function DELETE(request: NextRequest) {
         data: { role: 'admin' },
       });
     }
+
+    void broadcastGroupRealtimeEvent({
+      prisma,
+      workspaceId,
+      groupId,
+      type: 'group_updated',
+      action: 'membership_changed',
+    }).catch((error) => {
+      console.error('Broadcast group membership update error:', error);
+    });
 
     return NextResponse.json({
       success: true,

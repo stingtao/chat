@@ -23,7 +23,7 @@ interface ChatWindowProps {
   onTypingStart?: () => void;
   onTypingStop?: () => void;
   isOnline?: boolean;
-  lastSeen?: Date;
+  lastSeen?: Date | string;
 }
 
 export default function ChatWindow({
@@ -44,19 +44,41 @@ export default function ChatWindow({
   isOnline,
   lastSeen,
 }: ChatWindowProps) {
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isTyping, setIsTyping] = useState(false);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
   const lang = useLang();
   const t = getTranslations(lang);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const isNearBottom = () => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distanceFromBottom < 120;
+  };
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    setShowJumpToLatest(false);
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (messages.length === 0) {
+      setShowJumpToLatest(false);
+      return;
+    }
+
+    const lastMessage = messages[messages.length - 1];
+    if (isNearBottom() || lastMessage?.senderId === currentUserId) {
+      scrollToBottom(messages.length === 1 ? 'auto' : 'smooth');
+    } else {
+      setShowJumpToLatest(true);
+    }
+  }, [messages, currentUserId]);
 
   // Handle typing indicator
   const handleTyping = useCallback(() => {
@@ -77,19 +99,30 @@ export default function ChatWindow({
     }, 2000);
   }, [isTyping, onTypingStart, onTypingStop]);
 
+  const stopTyping = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    if (isTyping) {
+      setIsTyping(false);
+      onTypingStop?.();
+    }
+  }, [isTyping, onTypingStop]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      stopTyping();
     };
-  }, []);
+  }, [stopTyping]);
 
   // Format last seen time
-  const formatLastSeen = (date: Date) => {
+  const formatLastSeen = (date: Date | string) => {
+    const normalizedDate = typeof date === 'string' ? new Date(date) : date;
     const now = new Date();
-    const diff = now.getTime() - date.getTime();
+    const diff = now.getTime() - normalizedDate.getTime();
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
@@ -190,7 +223,15 @@ export default function ChatWindow({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4">
+      <div
+        ref={messagesContainerRef}
+        onScroll={() => {
+          if (isNearBottom()) {
+            setShowJumpToLatest(false);
+          }
+        }}
+        className="flex-1 overflow-y-auto p-4 relative"
+      >
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <div
@@ -245,11 +286,41 @@ export default function ChatWindow({
             <div ref={messagesEndRef} />
           </>
         )}
+
+        {showJumpToLatest && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom()}
+            className="sticky bottom-4 ml-auto flex items-center gap-2 px-3 py-2 rounded-full shadow-lg text-sm font-medium hover:opacity-90"
+            style={{
+              backgroundColor: 'var(--ws-primary)',
+              color: 'var(--ws-primary-text)',
+            }}
+          >
+            <span>{t.chatWindow.jumpToLatest}</span>
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M19 14l-7 7m0 0l-7-7m7 7V3"
+              />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Message Input */}
       <MessageInput
-        onSend={onSendMessage}
+        onSend={(content) => {
+          stopTyping();
+          onSendMessage(content);
+        }}
         onFileUpload={onFileUpload}
         disabled={inputDisabled ?? loading}
         uploading={uploading}

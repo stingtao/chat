@@ -1,14 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
 import { hashPassword, generateToken } from '@/lib/auth';
-import { validateEmail, validatePassword } from '@/lib/utils';
+import { normalizeTextInput, validateEmail, validatePassword } from '@/lib/utils';
+import { applySessionCookie } from '@/lib/session';
+
+const MAX_HOST_NAME_LENGTH = 80;
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const { email, password, name } = await request.json();
+    const body = (await request.json()) as {
+      email?: string;
+      password?: string;
+      name?: string;
+    };
+    const email = normalizeTextInput(body.email).toLowerCase();
+    const password = typeof body.password === 'string' ? body.password : '';
+    const rawName = typeof body.name === 'string' ? body.name.trim() : '';
+    const name = normalizeTextInput(body.name, { maxLength: MAX_HOST_NAME_LENGTH });
 
     // Validation
     if (!email || !password || !name) {
@@ -21,6 +32,13 @@ export async function POST(request: NextRequest) {
     if (!validateEmail(email)) {
       return NextResponse.json(
         { success: false, error: 'Invalid email format' },
+        { status: 400 }
+      );
+    }
+
+    if (rawName.length > MAX_HOST_NAME_LENGTH) {
+      return NextResponse.json(
+        { success: false, error: `Name must be ${MAX_HOST_NAME_LENGTH} characters or fewer` },
         { status: 400 }
       );
     }
@@ -62,7 +80,7 @@ export async function POST(request: NextRequest) {
       type: 'host',
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         token,
@@ -73,6 +91,9 @@ export async function POST(request: NextRequest) {
         },
       },
     });
+
+    applySessionCookie(response, 'host', token);
+    return response;
   } catch (error) {
     console.error('Host registration error:', error);
     return NextResponse.json(

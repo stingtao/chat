@@ -1,20 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
 import { getPrismaClientFromContext } from '@/lib/db';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
 
 // Get user notifications
 export async function GET(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 
@@ -84,18 +78,16 @@ export async function GET(request: NextRequest) {
 // Mark notifications as read
 export async function PUT(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = (await request.json()) as {
+      notificationIds?: string[];
+      markAll?: boolean;
+      workspaceId?: string;
+    };
     const { notificationIds, markAll, workspaceId } = body;
 
     const prisma = await getPrismaClientFromContext();
@@ -154,14 +146,8 @@ export async function PUT(request: NextRequest) {
 // Delete old notifications (cleanup)
 export async function DELETE(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 

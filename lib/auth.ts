@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import bcrypt from 'bcryptjs';
 import { getCloudflareEnv } from './cloudflare';
+import { generateRandomString, generateUppercaseCode, slugify } from './utils';
 
 export interface JWTPayload {
   userId: string;
@@ -8,13 +9,35 @@ export interface JWTPayload {
   type: 'host' | 'client';
 }
 
+export const SESSION_COOKIE_NAMES = {
+  client: 'client_session',
+  host: 'host_session',
+} as const;
+
+export function getSessionCookieName(type: JWTPayload['type']): string {
+  return SESSION_COOKIE_NAMES[type];
+}
+
+export function parseBearerToken(header: string | null | undefined): string | null {
+  if (!header?.startsWith('Bearer ')) {
+    return null;
+  }
+
+  return header.slice(7).trim() || null;
+}
+
 function getJwtSecret(secretOverride?: string): Uint8Array {
   const envSecret = getCloudflareEnv()?.JWT_SECRET;
-  const secret =
-    secretOverride ||
-    envSecret ||
-    process.env.JWT_SECRET ||
-    'your-secret-key-change-in-production';
+  const secret = secretOverride || envSecret || process.env.JWT_SECRET;
+
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET must be configured in production.');
+    }
+
+    return new TextEncoder().encode('development-only-secret-change-me');
+  }
+
   return new TextEncoder().encode(secret);
 }
 
@@ -44,20 +67,16 @@ export async function verifyToken(
   try {
     const JWT_SECRET = getJwtSecret(secretOverride);
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as JWTPayload;
+    return payload as unknown as JWTPayload;
   } catch {
     return null;
   }
 }
 
 export function generateInviteCode(): string {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
+  return generateUppercaseCode(8);
 }
 
 export function generateSlug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    + '-' + Math.random().toString(36).substring(2, 6);
+  return `${slugify(name)}-${generateRandomString(4)}`;
 }

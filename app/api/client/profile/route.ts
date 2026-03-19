@@ -1,41 +1,48 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { WSMessage } from '@/lib/types';
+import { normalizeTextInput } from '@/lib/utils';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
+
+const MAX_USERNAME_LENGTH = 30;
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
+}
 
 // Update client profile
 export async function PUT(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { username, avatar } = await request.json();
+    const { username, avatar } = (await request.json()) as {
+      username?: string;
+      avatar?: string | null;
+    };
     const updates: { username?: string; avatar?: string | null } = {};
 
     if (typeof username === 'string') {
-      const trimmed = username.trim();
+      const trimmed = normalizeTextInput(username, { maxLength: MAX_USERNAME_LENGTH });
       if (!trimmed) {
         return NextResponse.json(
           { success: false, error: 'Username is required' },
           { status: 400 }
         );
       }
-      if (trimmed.length > 30) {
+      if (username.trim().length > MAX_USERNAME_LENGTH) {
         return NextResponse.json(
           { success: false, error: 'Username is too long' },
           { status: 400 }
@@ -64,6 +71,35 @@ export async function PUT(request: NextRequest) {
         username: true,
         avatar: true,
       },
+    });
+
+    const memberships = await prisma.workspaceMember.findMany({
+      where: {
+        userId: payload.userId,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    memberships.forEach((member) => {
+      void broadcastWorkspaceEvent(member.workspaceId, {
+        type: 'workspace_member_updated',
+        payload: {
+          workspaceId: member.workspaceId,
+          member,
+        },
+        timestamp: Date.now(),
+      }).catch((error) => {
+        console.error('Broadcast workspace member updated error:', error);
+      });
     });
 
     return NextResponse.json({

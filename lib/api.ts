@@ -1,4 +1,12 @@
-import { ApiResponse } from './types';
+import {
+  ApiResponse,
+  ClientUser,
+  Friendship,
+  Group,
+  Message,
+  Workspace,
+  WorkspaceMember,
+} from './types';
 
 export class ApiClient {
   private baseUrl: string;
@@ -29,7 +37,7 @@ export class ApiClient {
         headers,
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as ApiResponse<T>;
       return data;
     } catch (error) {
       return {
@@ -40,19 +48,27 @@ export class ApiClient {
   }
 
   // Workspace APIs
+  async getClientSession() {
+    return this.request<ClientUser>('/api/client/session', { method: 'GET' });
+  }
+
+  async logoutClient() {
+    return this.request('/api/client/logout', { method: 'POST' });
+  }
+
   async getWorkspaces() {
-    return this.request('/api/client/workspaces', { method: 'GET' });
+    return this.request<Workspace[]>('/api/client/workspaces', { method: 'GET' });
   }
 
   async joinWorkspace(inviteCode: string) {
-    return this.request('/api/client/workspace/join', {
+    return this.request<Workspace>('/api/client/workspace/join', {
       method: 'POST',
       body: JSON.stringify({ inviteCode }),
     });
   }
 
   async getWorkspaceMembers(workspaceId: string) {
-    return this.request(`/api/client/workspace/${workspaceId}/members`, {
+    return this.request<WorkspaceMember[]>(`/api/client/workspace/${workspaceId}/members`, {
       method: 'GET',
     });
   }
@@ -63,7 +79,36 @@ export class ApiClient {
     if (receiverId) params.append('receiverId', receiverId);
     if (groupId) params.append('groupId', groupId);
 
-    return this.request(`/api/client/messages?${params}`, { method: 'GET' });
+    return this.request<Message[]>(`/api/client/messages?${params}`, { method: 'GET' });
+  }
+
+  async getMessagesIncremental(options: {
+    workspaceId: string;
+    receiverId?: string;
+    groupId?: string;
+    after?: string;
+    limit?: number;
+    markRead?: boolean;
+  }) {
+    const params = new URLSearchParams({ workspaceId: options.workspaceId });
+    if (options.receiverId) params.append('receiverId', options.receiverId);
+    if (options.groupId) params.append('groupId', options.groupId);
+    if (options.after) params.append('after', options.after);
+    if (options.limit) params.append('limit', String(options.limit));
+    if (options.markRead) params.append('markRead', 'true');
+
+    return this.request<Message[]>(`/api/client/messages?${params}`, { method: 'GET' });
+  }
+
+  async markConversationRead(options: {
+    workspaceId: string;
+    receiverId?: string;
+    groupId?: string;
+  }) {
+    return this.request<{ messageIds: string[] }>('/api/client/messages', {
+      method: 'PUT',
+      body: JSON.stringify(options),
+    });
   }
 
   async sendMessage(data: {
@@ -74,7 +119,7 @@ export class ApiClient {
     type?: string;
     fileUrl?: string;
   }) {
-    return this.request('/api/client/messages', {
+    return this.request<Message>('/api/client/messages', {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -82,34 +127,34 @@ export class ApiClient {
 
   // Friend APIs
   async getFriends(workspaceId: string) {
-    return this.request(`/api/client/friends?workspaceId=${workspaceId}`, {
+    return this.request<Friendship[]>(`/api/client/friends?workspaceId=${workspaceId}`, {
       method: 'GET',
     });
   }
 
   async sendFriendRequest(workspaceId: string, receiverId: string) {
-    return this.request('/api/client/friends', {
+    return this.request<Friendship>('/api/client/friends', {
       method: 'POST',
       body: JSON.stringify({ workspaceId, receiverId }),
     });
   }
 
   async respondToFriendRequest(friendshipId: string, status: 'accepted' | 'rejected') {
-    return this.request('/api/client/friends', {
+    return this.request<Friendship>('/api/client/friends', {
       method: 'PUT',
       body: JSON.stringify({ friendshipId, status }),
     });
   }
 
   async getFriendRequests(workspaceId: string) {
-    return this.request(`/api/client/friends/requests?workspaceId=${workspaceId}`, {
+    return this.request<Friendship[]>(`/api/client/friends/requests?workspaceId=${workspaceId}`, {
       method: 'GET',
     });
   }
 
   // Group APIs
   async getGroups(workspaceId: string) {
-    return this.request(`/api/client/groups?workspaceId=${workspaceId}`, {
+    return this.request<Group[]>(`/api/client/groups?workspaceId=${workspaceId}`, {
       method: 'GET',
     });
   }
@@ -119,21 +164,21 @@ export class ApiClient {
     name: string;
     memberIds: string[];
   }) {
-    return this.request('/api/client/groups', {
+    return this.request<Group>('/api/client/groups', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async updateGroup(data: { workspaceId: string; groupId: string; name: string }) {
-    return this.request('/api/client/groups', {
+    return this.request<Group>('/api/client/groups', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
   async leaveGroup(data: { workspaceId: string; groupId: string }) {
-    return this.request('/api/client/groups', {
+    return this.request<{ groupId: string; left?: boolean; deleted?: boolean }>('/api/client/groups', {
       method: 'DELETE',
       body: JSON.stringify(data),
     });
@@ -141,7 +186,7 @@ export class ApiClient {
 
   // Status APIs
   async updateStatus(workspaceId: string) {
-    return this.request('/api/client/status', {
+    return this.request<{ lastSeenAt: string }>('/api/client/status', {
       method: 'POST',
       body: JSON.stringify({ workspaceId }),
     });
@@ -149,7 +194,7 @@ export class ApiClient {
 
   // Profile APIs
   async updateProfile(data: { username?: string; avatar?: string | null }) {
-    return this.request('/api/client/profile', {
+    return this.request<ClientUser>('/api/client/profile', {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -171,7 +216,12 @@ export class ApiClient {
         body: formData,
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as ApiResponse<{
+        url: string;
+        fileName: string;
+        size: number;
+        type: string;
+      }>;
       return data;
     } catch (error) {
       return {

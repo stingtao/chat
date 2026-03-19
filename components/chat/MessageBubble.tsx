@@ -1,5 +1,5 @@
 import { Message } from '@/lib/types';
-import { formatTime, getInitials } from '@/lib/utils';
+import { formatTime, getInitials, parseReadBy } from '@/lib/utils';
 
 interface MessageBubbleProps {
   message: Message;
@@ -38,14 +38,11 @@ function ReadReceiptIcon({ status }: { status: 'sent' | 'delivered' | 'read' }) 
 export default function MessageBubble({ message, isOwn, showReadReceipt = false }: MessageBubbleProps) {
   // Determine read receipt status
   const getReadStatus = (): 'sent' | 'delivered' | 'read' => {
-    try {
-      const readBy = JSON.parse(message.readBy || '[]');
-      if (Array.isArray(readBy) && readBy.length > 0) {
-        return 'read';
-      }
-    } catch {
-      // If parsing fails, assume sent
+    const readBy = parseReadBy(message.readBy);
+    if (readBy.length > 0) {
+      return 'read';
     }
+
     // For now, assume delivered if message has an ID (was saved)
     return message.id ? 'delivered' : 'sent';
   };

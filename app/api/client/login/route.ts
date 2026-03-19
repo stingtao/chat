@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
 import { verifyPassword, generateToken } from '@/lib/auth';
+import { normalizeTextInput } from '@/lib/utils';
+import { applySessionCookie } from '@/lib/session';
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const { email, password } = await request.json();
+    const body = (await request.json()) as { email?: string; password?: string };
+    const email = normalizeTextInput(body.email).toLowerCase();
+    const password = typeof body.password === 'string' ? body.password : '';
 
     if (!email || !password) {
       return NextResponse.json(
@@ -40,7 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify password
-    const isValid = await verifyPassword(password, user.password);
+    const isValid = await verifyPassword(password, user.password!);
     if (!isValid) {
       return NextResponse.json(
         { success: false, error: 'Invalid credentials' },
@@ -55,7 +59,7 @@ export async function POST(request: NextRequest) {
       type: 'client',
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         token,
@@ -67,6 +71,9 @@ export async function POST(request: NextRequest) {
         },
       },
     });
+
+    applySessionCookie(response, 'client', token);
+    return response;
   } catch (error) {
     console.error('Client login error:', error);
     return NextResponse.json(

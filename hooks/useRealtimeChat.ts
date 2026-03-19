@@ -1,10 +1,27 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import type { Message, WSMessage } from '@/lib/types';
 
-export function useRealtimeChat() {
+interface RealtimeReadPayload {
+  conversationType?: 'direct' | 'group';
+  conversationId?: string;
+  userId?: string;
+  messageIds?: string[];
+}
+
+interface RealtimeTypingPayload {
+  senderId?: string;
+}
+
+export function useRealtimeChat(options: {
+  onIncomingMessage?: (message: Message) => void;
+  onMessageRead?: (payload: RealtimeReadPayload) => void;
+  onTypingStart?: (payload: RealtimeTypingPayload) => void;
+  onTypingStop?: (payload: RealtimeTypingPayload) => void;
+} = {}) {
+  const { onIncomingMessage, onMessageRead, onTypingStart, onTypingStop } = options;
   const {
     token,
     currentWorkspace,
@@ -17,14 +34,42 @@ export function useRealtimeChat() {
   const [connected, setConnected] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const messageIdsRef = useRef<Set<string>>(new Set());
+  const callbacksRef = useRef({
+    onIncomingMessage,
+    onMessageRead,
+    onTypingStart,
+    onTypingStop,
+  });
+
+  useEffect(() => {
+    callbacksRef.current = {
+      onIncomingMessage,
+      onMessageRead,
+      onTypingStart,
+      onTypingStop,
+    };
+  }, [onIncomingMessage, onMessageRead, onTypingStart, onTypingStop]);
 
   useEffect(() => {
     messageIdsRef.current = new Set(messages.map((message) => message.id));
   }, [messages]);
 
+  const sendEvent = useCallback((event: Omit<WSMessage, 'timestamp'>) => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    socketRef.current.send(
+      JSON.stringify({
+        ...event,
+        timestamp: Date.now(),
+      })
+    );
+    return true;
+  }, []);
+
   useEffect(() => {
     if (
-      !token ||
       !currentWorkspace ||
       !currentConversationId ||
       !currentConversationType
@@ -38,7 +83,9 @@ export function useRealtimeChat() {
 
     const url = new URL('/ws', window.location.origin);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('token', token);
+    if (token && token !== 'cookie-session') {
+      url.searchParams.set('token', token);
+    }
     url.searchParams.set('workspaceId', currentWorkspace.id);
     url.searchParams.set('type', currentConversationType);
     url.searchParams.set('id', currentConversationId);
@@ -59,13 +106,30 @@ export function useRealtimeChat() {
         return;
       }
 
-      if (message.type !== 'new_message') return;
-      const payload = message.payload as Message;
-      if (!payload?.id) return;
-      if (messageIdsRef.current.has(payload.id)) return;
+      if (message.type === 'new_message') {
+        const payload = message.payload as Message;
+        if (!payload?.id) return;
+        if (messageIdsRef.current.has(payload.id)) return;
 
-      messageIdsRef.current.add(payload.id);
-      addMessage(payload);
+        messageIdsRef.current.add(payload.id);
+        addMessage(payload);
+        callbacksRef.current.onIncomingMessage?.(payload);
+        return;
+      }
+
+      if (message.type === 'message_read') {
+        callbacksRef.current.onMessageRead?.(message.payload as RealtimeReadPayload);
+        return;
+      }
+
+      if (message.type === 'typing_start') {
+        callbacksRef.current.onTypingStart?.(message.payload as RealtimeTypingPayload);
+        return;
+      }
+
+      if (message.type === 'typing_stop') {
+        callbacksRef.current.onTypingStop?.(message.payload as RealtimeTypingPayload);
+      }
     };
 
     return () => {
@@ -73,5 +137,5 @@ export function useRealtimeChat() {
     };
   }, [token, currentWorkspace?.id, currentConversationId, currentConversationType, addMessage]);
 
-  return { connected };
+  return { connected, sendEvent };
 }

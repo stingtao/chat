@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Workspace, WorkspaceMember, SpamReport } from '@/lib/types';
+import { useWorkspaceRealtime } from '@/hooks/useWorkspaceRealtime';
 import { getTranslations } from '@/lib/i18n';
 import { useLang, useLangHref } from '@/hooks/useLang';
+import { BlockedUser, HostUser, SpamReport, Workspace, WorkspaceMember } from '@/lib/types';
 
 export default function HostDashboardPage() {
   const router = useRouter();
@@ -13,12 +14,13 @@ export default function HostDashboardPage() {
   const withLang = useLangHref();
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
-  const [token, setToken] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<HostUser | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [spamReports, setSpamReports] = useState<SpamReport[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
   const [workspaceStats, setWorkspaceStats] = useState({ messages: 0, groups: 0 });
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'members' | 'spam' | 'settings'>('overview');
@@ -38,41 +40,83 @@ export default function HostDashboardPage() {
   const [settingsError, setSettingsError] = useState('');
   const [settingsSuccess, setSettingsSuccess] = useState('');
   const [logoUploading, setLogoUploading] = useState(false);
+  const [moderationError, setModerationError] = useState('');
+  const [pendingMemberActionUserId, setPendingMemberActionUserId] = useState<string | null>(null);
+  const [pendingSpamActionId, setPendingSpamActionId] = useState<string | null>(null);
+  const selectedWorkspaceId = selectedWorkspace?.id || null;
 
-  // Initialize auth
+  // Initialize auth from cookie-backed session
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    const storedUser = localStorage.getItem('user');
-    const userType = localStorage.getItem('userType');
+    let cancelled = false;
 
-    if (!storedToken || !storedUser || userType !== 'host') {
-      router.push(withLang('/host/login'));
-      return;
-    }
+    const bootstrapSession = async () => {
+      setLoading(true);
+      setAuthReady(false);
 
-    setToken(storedToken);
-    setUser(JSON.parse(storedUser));
-  }, [router]);
+      try {
+        const response = await fetch('/api/host/session');
+        const data = (await response.json()) as {
+          success: boolean;
+          data?: HostUser;
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        if (data.success && data.data) {
+          setUser(data.data);
+          setAuthReady(true);
+          return;
+        }
+
+        setUser(null);
+        setAuthReady(true);
+        router.push(withLang('/host/login'));
+      } catch (error) {
+        if (!cancelled) {
+          setUser(null);
+          setAuthReady(true);
+          router.push(withLang('/host/login'));
+        }
+      }
+    };
+
+    void bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, withLang]);
 
   // Load workspaces
   useEffect(() => {
-    if (!token) return;
+    if (!authReady || !user) return;
 
     const loadWorkspaces = async () => {
       try {
-        const response = await fetch('/api/host/workspace', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        const data = await response.json();
+        const response = await fetch('/api/host/workspace');
+        const data = (await response.json()) as {
+          success: boolean;
+          data?: Workspace[];
+        };
 
         if (data.success && data.data) {
-          setWorkspaces(data.data);
-          if (data.data.length > 0 && !selectedWorkspace) {
-            setSelectedWorkspace(data.data[0]);
-          }
+          const workspaceList = data.data;
+          setWorkspaces(workspaceList);
+          setSelectedWorkspace((currentWorkspace) => {
+            if (workspaceList.length === 0) {
+              return null;
+            }
+
+            if (!currentWorkspace) {
+              return workspaceList[0];
+            }
+
+            return (
+              workspaceList.find((workspace) => workspace.id === currentWorkspace.id) || workspaceList[0]
+            );
+          });
         }
       } catch (error) {
         console.error('Failed to load workspaces:', error);
@@ -81,52 +125,85 @@ export default function HostDashboardPage() {
       }
     };
 
-    loadWorkspaces();
-  }, [token]);
+    void loadWorkspaces();
+  }, [authReady, user]);
 
   // Load workspace data when selected workspace changes
   useEffect(() => {
-    if (!selectedWorkspace || !token) return;
+    if (!selectedWorkspaceId || !user) return;
 
+    let cancelled = false;
     const loadWorkspaceData = async () => {
-      const detailRes = await fetch(`/api/host/workspace/${selectedWorkspace.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const detailData = await detailRes.json();
-      if (detailData.success && detailData.data?._count) {
-        setWorkspaceStats({
-          messages: detailData.data._count.messages || 0,
-          groups: detailData.data._count.groups || 0,
-        });
-      }
+      setWorkspaceStats({ messages: 0, groups: 0 });
+      setMembers([]);
+      setSpamReports([]);
+      setBlockedUsers([]);
+      setModerationError('');
+      setPendingMemberActionUserId(null);
+      setPendingSpamActionId(null);
 
-      // Load members
-      const membersRes = await fetch(
-        `/api/host/workspace/${selectedWorkspace.id}/members`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-      const membersData = await membersRes.json();
-      if (membersData.success) {
-        setMembers(membersData.data || []);
-      }
+      try {
+        const [detailRes, membersRes, spamRes, blockedRes] = await Promise.all([
+          fetch(`/api/host/workspace/${selectedWorkspaceId}`),
+          fetch(`/api/host/workspace/${selectedWorkspaceId}/members`),
+          fetch(`/api/host/workspace/${selectedWorkspaceId}/spam-reports`),
+          fetch(`/api/host/workspace/${selectedWorkspaceId}/block`),
+        ]);
 
-      // Load spam reports
-      const spamRes = await fetch(
-        `/api/host/workspace/${selectedWorkspace.id}/spam-reports`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
+        const [detailData, membersData, spamData, blockedData] = await Promise.all([
+          detailRes.json() as Promise<{
+            success: boolean;
+            data?: Workspace & { _count?: { messages?: number; groups?: number } };
+          }>,
+          membersRes.json() as Promise<{
+            success: boolean;
+            data?: WorkspaceMember[];
+          }>,
+          spamRes.json() as Promise<{
+            success: boolean;
+            data?: SpamReport[];
+          }>,
+          blockedRes.json() as Promise<{
+            success: boolean;
+            data?: BlockedUser[];
+          }>,
+        ]);
+
+        if (cancelled) {
+          return;
         }
-      );
-      const spamData = await spamRes.json();
-      if (spamData.success) {
-        setSpamReports(spamData.data || []);
+
+        if (detailData.success && detailData.data?._count) {
+          setWorkspaceStats({
+            messages: detailData.data._count.messages || 0,
+            groups: detailData.data._count.groups || 0,
+          });
+        }
+
+        if (membersData.success) {
+          setMembers(membersData.data || []);
+        }
+
+        if (spamData.success) {
+          setSpamReports(spamData.data || []);
+        }
+
+        if (blockedData.success) {
+          setBlockedUsers(blockedData.data || []);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Failed to load workspace data:', error);
+        }
       }
     };
 
-    loadWorkspaceData();
-  }, [selectedWorkspace, token]);
+    void loadWorkspaceData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedWorkspaceId, user]);
 
   useEffect(() => {
     if (!selectedWorkspace) return;
@@ -144,11 +221,200 @@ export default function HostDashboardPage() {
     setSettingsSuccess('');
   }, [selectedWorkspace]);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('userType');
+  const upsertMember = (member: WorkspaceMember) => {
+    setMembers((previousMembers) => {
+      const nextMembers = previousMembers.filter(
+        (currentMember) => currentMember.userId !== member.userId
+      );
+      nextMembers.push(member);
+      nextMembers.sort(
+        (left, right) => new Date(right.joinedAt).getTime() - new Date(left.joinedAt).getTime()
+      );
+      return nextMembers;
+    });
+  };
+
+  const removeMember = (userId: string) => {
+    setMembers((previousMembers) =>
+      previousMembers.filter((member) => member.userId !== userId)
+    );
+  };
+
+  const upsertSpamReport = (report: SpamReport) => {
+    setSpamReports((previousReports) => {
+      const nextReports = previousReports.filter((currentReport) => currentReport.id !== report.id);
+      nextReports.push(report);
+      nextReports.sort(
+        (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      );
+      return nextReports;
+    });
+  };
+
+  const upsertBlockedUser = (blockedUser: BlockedUser) => {
+    setBlockedUsers((previousBlockedUsers) => {
+      const nextBlockedUsers = previousBlockedUsers.filter(
+        (currentBlockedUser) => currentBlockedUser.userId !== blockedUser.userId
+      );
+      nextBlockedUsers.push(blockedUser);
+      nextBlockedUsers.sort(
+        (left, right) =>
+          new Date(right.blockedAt).getTime() - new Date(left.blockedAt).getTime()
+      );
+      return nextBlockedUsers;
+    });
+  };
+
+  const removeBlockedUser = (userId: string) => {
+    setBlockedUsers((previousBlockedUsers) =>
+      previousBlockedUsers.filter((blockedUser) => blockedUser.userId !== userId)
+    );
+  };
+
+  const { connected: workspaceRealtimeConnected } = useWorkspaceRealtime({
+    enabled: Boolean(authReady && user && selectedWorkspaceId),
+    workspaceId: selectedWorkspaceId,
+    token: 'cookie-session',
+    authType: 'host',
+    onWorkspaceMemberJoined: ({ member }) => {
+      upsertMember(member);
+    },
+    onWorkspaceMemberRemoved: ({ userId }) => {
+      removeMember(userId);
+    },
+    onWorkspaceMemberUpdated: ({ member }) => {
+      upsertMember(member);
+    },
+    onSpamReportCreated: ({ report }) => {
+      upsertSpamReport(report);
+    },
+    onSpamReportUpdated: ({ report }) => {
+      upsertSpamReport(report);
+    },
+    onWorkspaceMemberBlocked: ({ blockedUser }) => {
+      removeMember(blockedUser.userId);
+      upsertBlockedUser(blockedUser);
+    },
+    onWorkspaceMemberUnblocked: ({ userId }) => {
+      removeBlockedUser(userId);
+    },
+  });
+
+  const handleLogout = async () => {
+    await fetch('/api/host/logout', { method: 'POST' });
     router.push(withLang('/host/login'));
+  };
+
+  const handleBlockMember = async (member: WorkspaceMember) => {
+    if (!selectedWorkspaceId) return;
+
+    setModerationError('');
+    setPendingMemberActionUserId(member.userId);
+
+    try {
+      const response = await fetch(`/api/host/workspace/${selectedWorkspaceId}/block`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: member.userId }),
+      });
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: BlockedUser;
+        error?: string;
+      };
+
+      if (!data.success || !data.data) {
+        throw new Error(data.error || t.hostDashboard.errors.blockFailed);
+      }
+
+      removeMember(member.userId);
+      upsertBlockedUser(data.data);
+    } catch (error) {
+      setModerationError(
+        error instanceof Error ? error.message : t.hostDashboard.errors.blockFailed
+      );
+    } finally {
+      setPendingMemberActionUserId((currentUserId) =>
+        currentUserId === member.userId ? null : currentUserId
+      );
+    }
+  };
+
+  const handleUnblockMember = async (userId: string) => {
+    if (!selectedWorkspaceId) return;
+
+    setModerationError('');
+    setPendingMemberActionUserId(userId);
+
+    try {
+      const response = await fetch(`/api/host/workspace/${selectedWorkspaceId}/block`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId }),
+      });
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: { userId?: string };
+        error?: string;
+      };
+
+      if (!data.success || data.data?.userId !== userId) {
+        throw new Error(data.error || t.hostDashboard.errors.unblockFailed);
+      }
+
+      removeBlockedUser(userId);
+    } catch (error) {
+      setModerationError(
+        error instanceof Error ? error.message : t.hostDashboard.errors.unblockFailed
+      );
+    } finally {
+      setPendingMemberActionUserId((currentUserId) =>
+        currentUserId === userId ? null : currentUserId
+      );
+    }
+  };
+
+  const handleUpdateSpamStatus = async (
+    reportId: string,
+    status: Extract<SpamReport['status'], 'reviewed' | 'resolved'>
+  ) => {
+    if (!selectedWorkspaceId) return;
+
+    setModerationError('');
+    setPendingSpamActionId(reportId);
+
+    try {
+      const response = await fetch(`/api/host/workspace/${selectedWorkspaceId}/spam-reports`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reportId, status }),
+      });
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: SpamReport;
+        error?: string;
+      };
+
+      if (!data.success || !data.data) {
+        throw new Error(data.error || t.hostDashboard.errors.updateSpamFailed);
+      }
+
+      upsertSpamReport(data.data);
+    } catch (error) {
+      setModerationError(
+        error instanceof Error ? error.message : t.hostDashboard.errors.updateSpamFailed
+      );
+    } finally {
+      setPendingSpamActionId((currentReportId) =>
+        currentReportId === reportId ? null : currentReportId
+      );
+    }
   };
 
   const handleCreateWorkspace = async (e: React.FormEvent) => {
@@ -160,35 +426,27 @@ export default function HostDashboardPage() {
       return;
     }
 
-    if (!token) {
-      setCreateError(t.hostDashboard.errors.missingToken);
-      return;
-    }
-
     setCreateLoading(true);
-
-    console.log('Token:', token);
-    console.log('Creating workspace with name:', newWorkspaceName);
 
     try {
       const response = await fetch('/api/host/workspace', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ name: newWorkspaceName }),
       });
-
-      console.log('Response status:', response.status);
-
-      const data = await response.json();
-      console.log('Response data:', data);
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: Workspace;
+        error?: string;
+      };
 
       if (data.success && data.data) {
+        const createdWorkspace = data.data;
         // Add new workspace to list
-        setWorkspaces([data.data, ...workspaces]);
-        setSelectedWorkspace(data.data);
+        setWorkspaces((previousWorkspaces) => [createdWorkspace, ...previousWorkspaces]);
+        setSelectedWorkspace(createdWorkspace);
         setNewWorkspaceName('');
         setShowCreateWorkspace(false);
       } else {
@@ -203,7 +461,7 @@ export default function HostDashboardPage() {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedWorkspace || !token) return;
+    if (!selectedWorkspace) return;
 
     const trimmedName = settingsForm.name.trim();
     if (!trimmedName) {
@@ -221,12 +479,14 @@ export default function HostDashboardPage() {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ name: trimmedName }),
         });
 
-        const nameData = await nameResponse.json();
+        const nameData = (await nameResponse.json()) as {
+          success: boolean;
+          error?: string;
+        };
         if (!nameData.success) {
           throw new Error(nameData.error || 'Failed to update workspace name');
         }
@@ -236,7 +496,6 @@ export default function HostDashboardPage() {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           primaryColor: settingsForm.primaryColor,
@@ -248,7 +507,11 @@ export default function HostDashboardPage() {
         }),
       });
 
-      const settingsData = await settingsResponse.json();
+      const settingsData = (await settingsResponse.json()) as {
+        success: boolean;
+        data?: Workspace['settings'];
+        error?: string;
+      };
       if (!settingsData.success) {
         throw new Error(settingsData.error || 'Failed to update settings');
       }
@@ -275,7 +538,7 @@ export default function HostDashboardPage() {
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || !token) return;
+    if (!file) return;
 
     if (!file.type.startsWith('image/')) {
       setSettingsError(t.hostDashboard.errors.logoImageOnly);
@@ -294,20 +557,23 @@ export default function HostDashboardPage() {
 
       const response = await fetch('/api/upload', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
         body: formData,
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: { url?: string };
+        error?: string;
+      };
       if (!data.success || !data.data?.url) {
         throw new Error(data.error || t.hostDashboard.errors.logoUploadFailed);
       }
 
+      const uploadedLogoUrl = data.data.url;
+
       setSettingsForm((prev) => ({
         ...prev,
-        logo: data.data.url,
+        logo: uploadedLogoUrl,
       }));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : t.hostDashboard.errors.logoUploadFailed);
@@ -325,6 +591,10 @@ export default function HostDashboardPage() {
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-500"></div>
       </div>
     );
+  }
+
+  if (!authReady) {
+    return null;
   }
 
   return (
@@ -429,51 +699,64 @@ export default function HostDashboardPage() {
               <div className="bg-white rounded-lg shadow-sm">
                 {/* Tabs */}
                 <div className="border-b px-6 pt-6">
-                  <div className="flex gap-6">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('overview')}
-                      className={`pb-3 px-1 font-medium transition-colors ${
-                        activeTab === 'overview'
-                          ? 'text-green-600 border-b-2 border-green-600'
-                          : 'text-gray-500 hover:text-gray-700'
+                  <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                    <div className="flex gap-6">
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('overview')}
+                        className={`pb-3 px-1 font-medium transition-colors ${
+                          activeTab === 'overview'
+                            ? 'text-green-600 border-b-2 border-green-600'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {t.hostDashboard.tabs.overview}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('members')}
+                        className={`pb-3 px-1 font-medium transition-colors ${
+                          activeTab === 'members'
+                            ? 'text-green-600 border-b-2 border-green-600'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {t.hostDashboard.tabs.members} ({members.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('spam')}
+                        className={`pb-3 px-1 font-medium transition-colors ${
+                          activeTab === 'spam'
+                            ? 'text-green-600 border-b-2 border-green-600'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {t.hostDashboard.tabs.spam} ({spamReports.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('settings')}
+                        className={`pb-3 px-1 font-medium transition-colors ${
+                          activeTab === 'settings'
+                            ? 'text-green-600 border-b-2 border-green-600'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {t.hostDashboard.tabs.settings}
+                      </button>
+                    </div>
+                    <span
+                      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
+                        workspaceRealtimeConnected
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
                       }`}
                     >
-                      {t.hostDashboard.tabs.overview}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('members')}
-                      className={`pb-3 px-1 font-medium transition-colors ${
-                        activeTab === 'members'
-                          ? 'text-green-600 border-b-2 border-green-600'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {t.hostDashboard.tabs.members} ({members.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('spam')}
-                      className={`pb-3 px-1 font-medium transition-colors ${
-                        activeTab === 'spam'
-                          ? 'text-green-600 border-b-2 border-green-600'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {t.hostDashboard.tabs.spam} ({spamReports.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('settings')}
-                      className={`pb-3 px-1 font-medium transition-colors ${
-                        activeTab === 'settings'
-                          ? 'text-green-600 border-b-2 border-green-600'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {t.hostDashboard.tabs.settings}
-                    </button>
+                      {workspaceRealtimeConnected
+                        ? t.hostDashboard.realtime.connected
+                        : t.hostDashboard.realtime.disconnected}
+                    </span>
                   </div>
                 </div>
 
@@ -550,17 +833,29 @@ export default function HostDashboardPage() {
                   )}
 
                   {activeTab === 'members' && (
-                    <div>
-                      <h3 className="font-semibold text-gray-900 mb-4">
-                        {t.hostDashboard.members.title}
-                      </h3>
+                    <div className="space-y-6">
+                      <div>
+                        <h3 className="font-semibold text-gray-900 mb-1">
+                          {t.hostDashboard.members.title}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          {t.hostDashboard.members.subtitle(blockedUsers.length)}
+                        </p>
+                      </div>
+
+                      {moderationError && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                          {moderationError}
+                        </div>
+                      )}
+
                       <div className="space-y-2">
                         {members.map((member) => (
                           <div
                             key={member.id}
-                            className="p-4 border rounded-lg flex items-center justify-between"
+                            className="flex items-center justify-between gap-4 rounded-lg border p-4"
                           >
-                            <div>
+                            <div className="min-w-0">
                               <div className="font-medium text-gray-900">
                                 {member.user?.username || t.common.unknown}
                               </div>
@@ -568,10 +863,22 @@ export default function HostDashboardPage() {
                                 {member.user?.email || t.common.noEmail}
                               </div>
                             </div>
-                            <div className="text-sm text-gray-500">
-                              {t.hostDashboard.members.joined(
-                                new Date(member.joinedAt).toLocaleDateString()
-                              )}
+                            <div className="flex items-center gap-3">
+                              <div className="text-sm text-gray-500">
+                                {t.hostDashboard.members.joined(
+                                  new Date(member.joinedAt).toLocaleDateString()
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleBlockMember(member)}
+                                disabled={pendingMemberActionUserId === member.userId}
+                                className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {pendingMemberActionUserId === member.userId
+                                  ? t.hostDashboard.members.blocking
+                                  : t.hostDashboard.members.block}
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -582,19 +889,85 @@ export default function HostDashboardPage() {
                           </div>
                         )}
                       </div>
+
+                      <div className="border-t pt-6">
+                        <div className="mb-4">
+                          <h4 className="font-semibold text-gray-900">
+                            {t.hostDashboard.members.blockedTitle} ({blockedUsers.length})
+                          </h4>
+                          <p className="text-sm text-gray-500">
+                            {t.hostDashboard.members.blockedSubtitle}
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          {blockedUsers.map((blockedUser) => (
+                            <div
+                              key={blockedUser.id}
+                              className="flex items-center justify-between gap-4 rounded-lg border border-red-100 bg-red-50/40 p-4"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-medium text-gray-900">
+                                  {blockedUser.user?.username || t.common.unknown}
+                                </div>
+                                <div className="text-sm text-gray-500">
+                                  {blockedUser.user?.email || t.common.noEmail}
+                                </div>
+                                <div className="mt-1 text-xs text-gray-500">
+                                  {t.hostDashboard.members.blockedAt(
+                                    new Date(blockedUser.blockedAt).toLocaleString()
+                                  )}
+                                </div>
+                                {blockedUser.reason && (
+                                  <div className="mt-1 text-sm text-gray-600">
+                                    {t.hostDashboard.members.reason(blockedUser.reason)}
+                                  </div>
+                                )}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleUnblockMember(blockedUser.userId)}
+                                disabled={pendingMemberActionUserId === blockedUser.userId}
+                                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {pendingMemberActionUserId === blockedUser.userId
+                                  ? t.hostDashboard.members.unblocking
+                                  : t.hostDashboard.members.unblock}
+                              </button>
+                            </div>
+                          ))}
+
+                          {blockedUsers.length === 0 && (
+                            <div className="rounded-lg border border-dashed px-4 py-6 text-center text-gray-500">
+                              {t.hostDashboard.members.blockedEmpty}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
 
                   {activeTab === 'spam' && (
-                    <div>
-                      <h3 className="font-semibold text-gray-900 mb-4">
-                        {t.hostDashboard.spam.title}
-                      </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <h3 className="font-semibold text-gray-900 mb-1">
+                          {t.hostDashboard.spam.title}
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          {t.hostDashboard.spam.subtitle}
+                        </p>
+                      </div>
+
+                      {moderationError && (
+                        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                          {moderationError}
+                        </div>
+                      )}
+
                       <div className="space-y-2">
                         {spamReports.map((report) => (
                           <div
                             key={report.id}
-                            className="p-4 border rounded-lg"
+                            className="rounded-lg border p-4"
                           >
                             <div className="flex items-start justify-between mb-2">
                               <div className="font-medium text-gray-900">
@@ -619,6 +992,35 @@ export default function HostDashboardPage() {
                             </div>
                             <div className="text-xs text-gray-500 mt-2">
                               {new Date(report.createdAt).toLocaleString()}
+                            </div>
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleUpdateSpamStatus(report.id, 'reviewed')}
+                                disabled={
+                                  pendingSpamActionId === report.id ||
+                                  report.status === 'reviewed' ||
+                                  report.status === 'resolved'
+                                }
+                                className="rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {pendingSpamActionId === report.id
+                                  ? t.hostDashboard.spam.updating
+                                  : t.hostDashboard.spam.markReviewed}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleUpdateSpamStatus(report.id, 'resolved')}
+                                disabled={
+                                  pendingSpamActionId === report.id ||
+                                  report.status === 'resolved'
+                                }
+                                className="rounded-lg border border-green-200 px-3 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {pendingSpamActionId === report.id
+                                  ? t.hostDashboard.spam.updating
+                                  : t.hostDashboard.spam.markResolved}
+                              </button>
                             </div>
                           </div>
                         ))}

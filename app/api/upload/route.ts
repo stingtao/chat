@@ -1,21 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
 import { getCloudflareEnv } from '@/lib/cloudflare';
+import {
+  generateRandomString,
+  sanitizeFileExtension,
+  sanitizeStoragePathSegment,
+} from '@/lib/utils';
+import { authenticateNextRequestTypes } from '@/lib/session';
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
     const env = getCloudflareEnv();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const payload = await verifyToken(token);
+    const payload = await authenticateNextRequestTypes(request, ['client', 'host']);
     if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -29,6 +26,13 @@ export async function POST(request: NextRequest) {
     if (!file) {
       return NextResponse.json(
         { success: false, error: 'No file provided' },
+        { status: 400 }
+      );
+    }
+
+    if (file.size === 0) {
+      return NextResponse.json(
+        { success: false, error: 'Empty files are not allowed' },
         { status: 400 }
       );
     }
@@ -64,10 +68,10 @@ export async function POST(request: NextRequest) {
 
     // Generate unique file name
     const timestamp = Date.now();
-    const randomString = Math.random().toString(36).substring(2, 15);
-    const extension = file.name.includes('.') ? file.name.split('.').pop() : 'bin';
-    const safeExtension = extension || 'bin';
-    const fileName = `${payload.userId}/${timestamp}-${randomString}.${safeExtension}`;
+    const randomString = generateRandomString(20);
+    const safeExtension = sanitizeFileExtension(file.name, file.type);
+    const userSegment = sanitizeStoragePathSegment(payload.userId);
+    const fileName = `${userSegment}/${timestamp}-${randomString}.${safeExtension}`;
 
     // Get R2 bucket from environment
     const storage = env?.STORAGE;

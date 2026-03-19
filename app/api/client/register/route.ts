@@ -2,13 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
 import { hashPassword, generateToken } from '@/lib/auth';
 import { validateEmail, validatePassword } from '@/lib/utils';
+import { normalizeTextInput } from '@/lib/utils';
+import { applySessionCookie } from '@/lib/session';
+
+const MAX_USERNAME_LENGTH = 30;
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const { email, password, username } = await request.json();
+    const body = (await request.json()) as {
+      email?: string;
+      password?: string;
+      username?: string;
+    };
+    const email = normalizeTextInput(body.email).toLowerCase();
+    const password = typeof body.password === 'string' ? body.password : '';
+    const username = normalizeTextInput(body.username, { maxLength: MAX_USERNAME_LENGTH });
 
     // Validation
     if (!email || !password || !username) {
@@ -21,6 +32,13 @@ export async function POST(request: NextRequest) {
     if (!validateEmail(email)) {
       return NextResponse.json(
         { success: false, error: 'Invalid email format' },
+        { status: 400 }
+      );
+    }
+
+    if (typeof body.username === 'string' && body.username.trim().length > MAX_USERNAME_LENGTH) {
+      return NextResponse.json(
+        { success: false, error: `Username must be ${MAX_USERNAME_LENGTH} characters or fewer` },
         { status: 400 }
       );
     }
@@ -62,7 +80,7 @@ export async function POST(request: NextRequest) {
       type: 'client',
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         token,
@@ -74,6 +92,9 @@ export async function POST(request: NextRequest) {
         },
       },
     });
+
+    applySessionCookie(response, 'client', token);
+    return response;
   } catch (error) {
     console.error('Client registration error:', error);
     return NextResponse.json(

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { WSMessage } from '@/lib/types';
+import { authenticateNextRequest } from '@/lib/session';
+import { generateRandomString } from '@/lib/utils';
 
 export const runtime = 'edge';
 
@@ -14,7 +17,7 @@ async function generateUniqueMemberTag(
 
   while (attempts < maxAttempts) {
     // Generate random 4-digit tag
-    const tag = Math.floor(1000 + Math.random() * 9000).toString();
+    const tag = generateRandomString(4, '0123456789');
 
     // Check if tag is unique in this workspace
     const existing = await prisma.workspaceMember.findFirst({
@@ -32,31 +35,55 @@ async function generateUniqueMemberTag(
   }
 
   // If we can't find a unique 4-digit tag, use 5 digits
-  const tag = Math.floor(10000 + Math.random() * 90000).toString();
+  const tag = generateRandomString(5, '0123456789');
   return tag;
+}
+
+async function loadWorkspaceMemberSnapshot(
+  prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>,
+  workspaceId: string,
+  userId: string
+) {
+  return prisma.workspaceMember.findUnique({
+    where: {
+      workspaceId_userId: {
+        workspaceId,
+        userId,
+      },
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          avatar: true,
+        },
+      },
+    },
+  });
+}
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
 }
 
 // Join workspace with invite code
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { inviteCode } = await request.json();
+    const { inviteCode } = (await request.json()) as { inviteCode?: string };
 
     if (!inviteCode) {
       return NextResponse.json(
@@ -101,15 +128,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
-  if (existingMember) {
-    return NextResponse.json({
-      success: true,
-      data: workspace,
-    });
-  }
+    if (existingMember) {
+      return NextResponse.json({
+        success: true,
+        data: workspace,
+      });
+    }
 
-  // Generate unique memberTag
-  const memberTag = await generateUniqueMemberTag(prisma, workspace.id);
+    // Generate unique memberTag
+    const memberTag = await generateUniqueMemberTag(prisma, workspace.id);
 
     // Add as member
     await prisma.workspaceMember.create({
@@ -120,6 +147,20 @@ export async function POST(request: NextRequest) {
         role: 'member',
       },
     });
+
+    const member = await loadWorkspaceMemberSnapshot(prisma, workspace.id, payload.userId);
+    if (member) {
+      void broadcastWorkspaceEvent(workspace.id, {
+        type: 'workspace_member_joined',
+        payload: {
+          workspaceId: workspace.id,
+          member,
+        },
+        timestamp: Date.now(),
+      }).catch((error) => {
+        console.error('Broadcast workspace member joined error:', error);
+      });
+    }
 
     return NextResponse.json({
       success: true,

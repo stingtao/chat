@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { WorkspaceMember } from '@/lib/types';
-import { getInitials } from '@/lib/utils';
+import { getInitials, isUserOnline } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
 
@@ -99,13 +99,15 @@ export default function FriendList({
           {filteredMembers.map((member) => {
             if (!member.user) return null;
             const isPending = pendingOutgoingSet.has(member.user.id);
+            const isOnline = member.user.isOnline ?? isUserOnline(member.lastSeenAt);
 
             return (
               <div
                 key={member.id}
                 className="p-4 rounded-xl flex items-center gap-3 hover:bg-gray-50 transition-colors mb-2"
               >
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
+                <div className="relative w-12 h-12 flex-shrink-0">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold">
                   {member.user.avatar ? (
                     <img
                       src={member.user.avatar}
@@ -115,13 +117,21 @@ export default function FriendList({
                   ) : (
                     getInitials(member.user.username)
                   )}
+                  </div>
+                  {isOnline && (
+                    <span className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full bg-emerald-500 ring-2 ring-white" />
+                  )}
                 </div>
                 <div className="flex-1">
                   <h3 className="font-semibold text-gray-900">
                     {member.user.username}
                     <span className="text-gray-500 font-normal">#{member.memberTag}</span>
                   </h3>
-                  <p className="text-sm text-gray-500">{member.user.email}</p>
+                  <p className="text-sm text-gray-500">
+                    {member.user.email}
+                    <span className="mx-1.5">•</span>
+                    {isOnline ? t.chatWindow.online : t.chatWindow.offline}
+                  </p>
                 </div>
                 {isPending ? (
                   <span className="px-3 py-2 text-sm font-medium text-gray-500">

@@ -1,24 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/auth';
 import { getPrismaClientFromContext } from '@/lib/db';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
 
 // Register or update device token for push notifications
 export async function POST(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = (await request.json()) as {
+      deviceToken?: string;
+      platform?: string;
+      deviceName?: string;
+    };
     const { deviceToken, platform, deviceName } = body;
 
     if (!deviceToken || !platform) {
@@ -91,14 +89,8 @@ export async function POST(request: NextRequest) {
 // Get user's device tokens
 export async function GET(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 
@@ -133,14 +125,8 @@ export async function GET(request: NextRequest) {
 // Delete/deactivate device token (for logout)
 export async function DELETE(request: NextRequest) {
   try {
-    const authHeader = request.headers.get('authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const token = authHeader.substring(7);
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'client') {
+    const payload = await authenticateNextRequest(request, 'client');
+    if (!payload) {
       return NextResponse.json({ success: false, error: 'Invalid token' }, { status: 401 });
     }
 

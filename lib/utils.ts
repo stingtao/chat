@@ -1,7 +1,195 @@
 import { type ClassValue, clsx } from "clsx";
+import type { Message } from './types';
+
+const DEFAULT_RANDOM_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const UPPERCASE_RANDOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const STORAGE_EXTENSION_BY_MIME: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'text/plain': 'txt',
+};
+
+export type ConversationType = 'direct' | 'group';
 
 export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
+}
+
+export function clampNumber(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
+export function generateRandomString(
+  length: number,
+  alphabet: string = DEFAULT_RANDOM_ALPHABET
+): string {
+  const safeLength = Math.max(1, length);
+  const bytes = new Uint8Array(safeLength);
+  crypto.getRandomValues(bytes);
+
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
+}
+
+export function generateUppercaseCode(length: number): string {
+  return generateRandomString(length, UPPERCASE_RANDOM_ALPHABET);
+}
+
+export function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+}
+
+export function normalizeLineBreaks(value: string): string {
+  return value.replace(/\r\n?/g, '\n');
+}
+
+export function normalizeTextInput(
+  value: unknown,
+  options: { multiline?: boolean; maxLength?: number } = {}
+): string {
+  if (typeof value !== 'string') return '';
+
+  const normalized = options.multiline
+    ? normalizeLineBreaks(value).trim()
+    : value.trim().replace(/\s+/g, ' ');
+
+  if (!options.maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, options.maxLength);
+}
+
+export function sanitizeStoragePathSegment(value: string): string {
+  const cleaned = value.replace(/[^a-zA-Z0-9_-]/g, '');
+  return cleaned || 'file';
+}
+
+export function sanitizeFileExtension(fileName: string, mimeType?: string): string {
+  const extension = fileName.includes('.') ? fileName.split('.').pop() ?? '' : '';
+  const normalized = extension.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (normalized && normalized.length <= 10) {
+    return normalized;
+  }
+
+  return STORAGE_EXTENSION_BY_MIME[mimeType || ''] || 'bin';
+}
+
+export function toDate(value: Date | string | undefined | null): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function compareMessagesByCreatedAt(a: Message, b: Message): number {
+  const aTime = toDate(a.createdAt)?.getTime() ?? 0;
+  const bTime = toDate(b.createdAt)?.getTime() ?? 0;
+
+  if (aTime !== bTime) {
+    return aTime - bTime;
+  }
+
+  return a.id.localeCompare(b.id);
+}
+
+export function mergeMessagesById(
+  existing: Message[],
+  incoming: Message[] | Message
+): Message[] {
+  const nextMessages = Array.isArray(incoming) ? incoming : [incoming];
+  const messageMap = new Map(existing.map((message) => [message.id, message]));
+
+  for (const message of nextMessages) {
+    messageMap.set(message.id, message);
+  }
+
+  return Array.from(messageMap.values()).sort(compareMessagesByCreatedAt);
+}
+
+export function buildConversationKey(type: ConversationType, id: string): string {
+  return `${type}:${id}`;
+}
+
+export function parseConversationNotificationData(
+  raw: string | Record<string, unknown> | null | undefined
+): { conversationId?: string; conversationType?: ConversationType } | null {
+  if (!raw) return null;
+
+  const data =
+    typeof raw === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })()
+      : raw;
+
+  if (!data) return null;
+
+  const conversationId =
+    typeof data.conversationId === 'string' ? data.conversationId : undefined;
+  const conversationType =
+    data.conversationType === 'direct' || data.conversationType === 'group'
+      ? data.conversationType
+      : undefined;
+
+  if (!conversationId || !conversationType) {
+    return null;
+  }
+
+  return { conversationId, conversationType };
+}
+
+export function parseReadBy(
+  raw: string[] | string | null | undefined
+): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === 'string');
+  }
+
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter((value): value is string => typeof value === 'string');
+  } catch {
+    return [];
+  }
+}
+
+export function appendReadByUser(
+  raw: string[] | string | null | undefined,
+  userId: string
+): string[] {
+  const readBy = parseReadBy(raw);
+  if (readBy.includes(userId)) {
+    return readBy;
+  }
+
+  return [...readBy, userId];
+}
+
+export function serializeReadBy(raw: string[] | string | null | undefined): string {
+  return JSON.stringify(parseReadBy(raw));
 }
 
 export function formatDate(date: Date | string): string {

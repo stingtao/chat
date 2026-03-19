@@ -22,11 +22,9 @@ export default function HostLoginPage() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
 
-  // Handle OAuth redirect with token
+  // Handle OAuth redirect errors surfaced through the callback
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
-    const userStr = params.get('user');
     const errorParam = params.get('error');
 
     if (errorParam) {
@@ -35,22 +33,7 @@ export default function HostLoginPage() {
       window.history.replaceState({}, '', appendLangToHref(window.location.pathname, lang));
       return;
     }
-
-    if (token && userStr) {
-      try {
-        const user = JSON.parse(decodeURIComponent(userStr));
-        localStorage.setItem('token', token);
-        localStorage.setItem('user', JSON.stringify(user));
-        localStorage.setItem('userType', 'host');
-
-        // Redirect to dashboard
-        router.push(appendLangToHref('/host/dashboard', lang));
-      } catch (err) {
-        setError(t.auth.common.loginFailed);
-        window.history.replaceState({}, '', appendLangToHref(window.location.pathname, lang));
-      }
-    }
-  }, [lang, router, t.auth.common.loginFailed]);
+  }, [lang, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,15 +72,13 @@ export default function HostLoginPage() {
         }),
       });
 
-      const data = await response.json();
+      const data = (await response.json()) as {
+        success: boolean;
+        data?: { user: unknown };
+        error?: string;
+      };
 
       if (data.success && data.data) {
-        // Store token and user info
-        localStorage.setItem('token', data.data.token);
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('userType', 'host');
-
-        // Redirect to dashboard
         router.push(withLang('/host/dashboard'));
       } else {
         setError(data.error || t.auth.common.authFailed);
@@ -135,7 +116,11 @@ export default function HostLoginPage() {
         }),
       });
 
-      let data = await response.json();
+      let data = (await response.json()) as {
+        success: boolean;
+        data?: { user: unknown };
+        error?: string;
+      };
 
       // If login fails, try to register
       if (!data.success) {
@@ -149,16 +134,14 @@ export default function HostLoginPage() {
           }),
         });
 
-        data = await response.json();
+        data = (await response.json()) as {
+          success: boolean;
+          data?: { user: unknown };
+          error?: string;
+        };
       }
 
       if (data.success && data.data) {
-        // Store token and user info
-        localStorage.setItem('token', data.data.token);
-        localStorage.setItem('user', JSON.stringify(data.data.user));
-        localStorage.setItem('userType', 'host');
-
-        // Redirect to dashboard
         router.push(withLang('/host/dashboard'));
       } else {
         setError(data.error || t.auth.common.quickLoginFailed);

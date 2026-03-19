@@ -211,9 +211,19 @@ export const MESSAGES = {
       title: 'Chats',
       searchPlaceholder: 'Search conversations...',
       startChatHint: 'Click to start chatting',
+      youPrefix: 'You',
+      sentImage: 'Sent an image',
+      youSentImage: 'You sent an image',
+      sentFile: 'Shared a file',
+      youSentFile: 'You shared a file',
       members: (count: number) => `${count} members`,
+      directMessages: 'Direct Messages',
+      groups: 'Groups',
+      unreadSummary: (count: number) => `${count} unread`,
       emptyTitle: 'No conversations yet',
       emptySubtitle: 'Add friends to start chatting',
+      searchEmpty: 'No matching conversations',
+      searchEmptyHint: 'Try another name, keyword, or group',
     },
     chatWindow: {
       online: 'Online',
@@ -223,6 +233,7 @@ export const MESSAGES = {
       noMessagesTitle: 'No messages yet',
       noMessagesSubtitle: 'Send a message to start the conversation',
       backLabel: 'Back',
+      jumpToLatest: 'Jump to latest',
       isTyping: 'is typing',
       areTyping: 'are typing',
       and: 'and',
@@ -296,6 +307,10 @@ export const MESSAGES = {
       createWorkspace: 'Create Workspace',
       workspacesTitle: 'Workspaces',
       noWorkspaces: 'No workspaces yet',
+      realtime: {
+        connected: 'Realtime connected',
+        disconnected: 'Realtime reconnecting',
+      },
       tabs: {
         overview: 'Overview',
         members: 'Members',
@@ -314,12 +329,29 @@ export const MESSAGES = {
       },
       members: {
         title: 'Workspace Members',
+        subtitle: (blockedCount: number) =>
+          blockedCount === 0
+            ? 'Manage active members'
+            : `Manage active members and ${blockedCount} blocked users`,
         joined: (date: string) => `Joined ${date}`,
+        block: 'Block',
+        blocking: 'Blocking...',
+        unblock: 'Unblock',
+        unblocking: 'Unblocking...',
+        blockedTitle: 'Blocked Users',
+        blockedSubtitle: 'Blocked users cannot rejoin until manually unblocked.',
+        blockedAt: (date: string) => `Blocked ${date}`,
+        reason: (reason: string) => `Reason: ${reason}`,
+        blockedEmpty: 'No blocked users',
         empty: 'No members yet',
       },
       spam: {
         title: 'Spam Reports',
+        subtitle: 'Review new reports and close them without a full refresh.',
         reportedBy: (name: string) => `Reported by ${name}`,
+        markReviewed: 'Mark Reviewed',
+        markResolved: 'Mark Resolved',
+        updating: 'Updating...',
         empty: 'No spam reports',
         status: {
           pending: 'Pending',
@@ -367,6 +399,9 @@ export const MESSAGES = {
         saveFailed: 'Failed to save settings',
         logoImageOnly: 'Logo must be an image file',
         logoUploadFailed: 'Failed to upload logo',
+        blockFailed: 'Failed to block member',
+        unblockFailed: 'Failed to unblock member',
+        updateSpamFailed: 'Failed to update spam report',
       },
     },
   },
@@ -511,9 +546,19 @@ export const MESSAGES = {
       title: '聊天',
       searchPlaceholder: '搜尋對話...',
       startChatHint: '點擊開始聊天',
+      youPrefix: '你',
+      sentImage: '傳送了一張圖片',
+      youSentImage: '你傳送了一張圖片',
+      sentFile: '分享了一個檔案',
+      youSentFile: '你分享了一個檔案',
       members: (count: number) => `${count} 位成員`,
+      directMessages: '私訊',
+      groups: '群組',
+      unreadSummary: (count: number) => `${count} 則未讀`,
       emptyTitle: '尚無對話',
       emptySubtitle: '新增好友後即可開始聊天',
+      searchEmpty: '找不到符合的對話',
+      searchEmptyHint: '試試其他名稱、關鍵字或群組',
     },
     chatWindow: {
       online: '線上',
@@ -523,6 +568,7 @@ export const MESSAGES = {
       noMessagesTitle: '尚無訊息',
       noMessagesSubtitle: '傳送訊息開始對話',
       backLabel: '返回',
+      jumpToLatest: '跳到最新訊息',
       isTyping: '正在輸入',
       areTyping: '正在輸入',
       and: '和',
@@ -595,6 +641,10 @@ export const MESSAGES = {
       createWorkspace: '建立工作區',
       workspacesTitle: '工作區',
       noWorkspaces: '尚未建立工作區',
+      realtime: {
+        connected: '即時同步已連線',
+        disconnected: '即時同步重新連線中',
+      },
       tabs: {
         overview: '總覽',
         members: '成員',
@@ -613,12 +663,29 @@ export const MESSAGES = {
       },
       members: {
         title: '工作區成員',
+        subtitle: (blockedCount: number) =>
+          blockedCount === 0
+            ? '管理目前成員'
+            : `管理目前成員與 ${blockedCount} 位封鎖使用者`,
         joined: (date: string) => `加入於 ${date}`,
+        block: '封鎖',
+        blocking: '封鎖中...',
+        unblock: '解除封鎖',
+        unblocking: '解除中...',
+        blockedTitle: '已封鎖使用者',
+        blockedSubtitle: '被封鎖的使用者在解除前無法重新加入。',
+        blockedAt: (date: string) => `封鎖時間 ${date}`,
+        reason: (reason: string) => `原因：${reason}`,
+        blockedEmpty: '目前沒有已封鎖使用者',
         empty: '尚無成員',
       },
       spam: {
         title: '垃圾訊息回報',
+        subtitle: '即時檢視新回報並直接更新處理狀態。',
         reportedBy: (name: string) => `由 ${name} 檢舉`,
+        markReviewed: '標記為已檢視',
+        markResolved: '標記為已解決',
+        updating: '更新中...',
         empty: '尚無垃圾訊息回報',
         status: {
           pending: '待處理',
@@ -666,6 +733,9 @@ export const MESSAGES = {
         saveFailed: '儲存設定失敗',
         logoImageOnly: 'Logo 必須為圖片檔',
         logoUploadFailed: 'Logo 上傳失敗',
+        blockFailed: '封鎖成員失敗',
+        unblockFailed: '解除封鎖失敗',
+        updateSpamFailed: '更新垃圾訊息回報失敗',
       },
     },
   },
@@ -674,5 +744,5 @@ export const MESSAGES = {
 export type Messages = typeof MESSAGES.en;
 
 export function getTranslations(lang: Lang): Messages {
-  return MESSAGES[lang] || MESSAGES.en;
+  return (MESSAGES[lang] || MESSAGES.en) as unknown as Messages;
 }

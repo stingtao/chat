@@ -1,36 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
+import type { SpamReport, WSMessage } from '@/lib/types';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
+
+const SPAM_REPORT_STATUSES: SpamReport['status'][] = ['pending', 'reviewed', 'resolved'];
+
+async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {
+  await broadcastToRoom({
+    roomName: buildWorkspaceRoomName(workspaceId),
+    message,
+  });
+}
 
 // Get spam reports
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'host') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+    const { id } = await params;
 
     // Verify ownership
     const workspace = await prisma.workspace.findFirst({
       where: {
-        id: params.id,
+        id,
         hostId: payload.userId,
       },
     });
@@ -43,7 +47,7 @@ export async function GET(
     }
 
     const reports = await prisma.spamReport.findMany({
-      where: { workspaceId: params.id },
+      where: { workspaceId: id },
       include: {
         reporter: {
           select: {
@@ -73,27 +77,23 @@ export async function GET(
 // Update spam report status
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
+    const { id } = await params;
 
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'host') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const { reportId, status } = await request.json();
+    const { reportId, status } = (await request.json()) as {
+      reportId?: string;
+      status?: string;
+    };
 
     if (!reportId || !status) {
       return NextResponse.json(
@@ -102,24 +102,63 @@ export async function PUT(
       );
     }
 
-    const report = await prisma.spamReport.updateMany({
+    if (!SPAM_REPORT_STATUSES.includes(status as SpamReport['status'])) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid spam report status' },
+        { status: 400 }
+      );
+    }
+
+    const existingReport = await prisma.spamReport.findFirst({
       where: {
         id: reportId,
-        workspaceId: params.id,
+        workspaceId: id,
       },
-      data: { status },
+      select: {
+        id: true,
+      },
     });
 
-    if (report.count === 0) {
+    if (!existingReport) {
       return NextResponse.json(
         { success: false, error: 'Report not found' },
         { status: 404 }
       );
     }
 
+    const report = await prisma.spamReport.update({
+      where: {
+        id: reportId,
+      },
+      data: {
+        status,
+      },
+      include: {
+        reporter: {
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            avatar: true,
+          },
+        },
+      },
+    });
+
+    void broadcastWorkspaceEvent(id, {
+      type: 'spam_report_updated',
+      payload: {
+        workspaceId: id,
+        report,
+      },
+      timestamp: Date.now(),
+    }).catch((error) => {
+      console.error('Broadcast spam report update error:', error);
+    });
+
     return NextResponse.json({
       success: true,
-      data: { id: reportId, status },
+      data: report,
     });
   } catch (error) {
     console.error('Update spam report error:', error);

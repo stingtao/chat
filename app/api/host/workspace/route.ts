@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken, generateInviteCode, generateSlug } from '@/lib/auth';
+import { generateInviteCode, generateSlug } from '@/lib/auth';
+import { authenticateNextRequest } from '@/lib/session';
+import { normalizeTextInput } from '@/lib/utils';
 
 export const runtime = 'edge';
 
@@ -8,16 +10,8 @@ export const runtime = 'edge';
 export async function GET(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'host') {
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
@@ -52,44 +46,31 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    console.log('Received token:', token ? 'exists' : 'missing');
-
-    if (!token) {
-      console.log('No token provided');
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized - No token' },
+        { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    const payload = await verifyToken(token);
-    console.log('Token payload:', payload);
+    const { name } = (await request.json()) as { name?: string };
+    const normalizedName = normalizeTextInput(name, { maxLength: 60 });
 
-    if (!payload || payload.type !== 'host') {
-      console.log('Invalid token or wrong user type');
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized - Invalid token' },
-        { status: 401 }
-      );
-    }
-
-    const { name } = await request.json();
-
-    if (!name || name.trim().length === 0) {
+    if (!normalizedName) {
       return NextResponse.json(
         { success: false, error: 'Workspace name is required' },
         { status: 400 }
       );
     }
 
-    const slug = generateSlug(name);
+    const slug = generateSlug(normalizedName);
     const inviteCode = generateInviteCode();
 
     const workspace = await prisma.workspace.create({
       data: {
         hostId: payload.userId,
-        name,
+        name: normalizedName,
         slug,
         inviteCode,
         settings: {

@@ -1,36 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
 
 // Update workspace settings
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'host') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+    const { id } = await params;
 
     // Verify ownership
     const workspace = await prisma.workspace.findFirst({
       where: {
-        id: params.id,
+        id,
         hostId: payload.userId,
       },
     });
@@ -42,10 +35,17 @@ export async function PUT(
       );
     }
 
-    const data = await request.json();
+    const data = (await request.json()) as {
+      primaryColor?: string;
+      secondaryColor?: string;
+      logo?: string | null;
+      welcomeMessage?: string | null;
+      allowGroupChat?: boolean;
+      maxGroupSize?: number;
+    };
 
     const settings = await prisma.workspaceSettings.upsert({
-      where: { workspaceId: params.id },
+      where: { workspaceId: id },
       update: {
         primaryColor: data.primaryColor,
         secondaryColor: data.secondaryColor,
@@ -55,7 +55,7 @@ export async function PUT(
         maxGroupSize: data.maxGroupSize,
       },
       create: {
-        workspaceId: params.id,
+        workspaceId: id,
         primaryColor: data.primaryColor || '#3b82f6',
         secondaryColor: data.secondaryColor || '#10b981',
         logo: data.logo,

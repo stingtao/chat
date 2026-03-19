@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/stores/chatStore';
 import { api } from '@/lib/api';
@@ -14,17 +14,32 @@ import GroupSettings from '@/components/chat/GroupSettings';
 import ProfileSettings from '@/components/chat/ProfileSettings';
 import { useMessagePolling } from '@/hooks/useMessagePolling';
 import { useRealtimeChat } from '@/hooks/useRealtimeChat';
+import { useWorkspaceRealtime } from '@/hooks/useWorkspaceRealtime';
 import { useStatusUpdate } from '@/hooks/useStatusUpdate';
-import { Friendship, Workspace, WorkspaceMember } from '@/lib/types';
-import { getContrastColor, hexToRgba, normalizeHexColor } from '@/lib/utils';
+import {
+  FriendAcceptedEventPayload,
+  FriendRequestEventPayload,
+  GroupDeletedEventPayload,
+  GroupRealtimeEventPayload,
+  Friendship,
+  Group,
+  Message,
+  Workspace,
+  WorkspaceMember,
+  WorkspaceMemberJoinedEventPayload,
+  WorkspaceMemberRemovedEventPayload,
+  WorkspaceMemberUpdatedEventPayload,
+} from '@/lib/types';
+import { getContrastColor, hexToRgba, isUserOnline, normalizeHexColor } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang, useLangHref } from '@/hooks/useLang';
+
+const CONVERSATION_LIST_POLL_INTERVAL_MS = 8000;
 
 export default function ChatPage() {
   const router = useRouter();
   const {
     user,
-    token,
     setUser,
     setToken,
     currentWorkspace,
@@ -37,6 +52,7 @@ export default function ChatPage() {
     messages,
     setMessages,
     addMessage,
+    markMessagesRead,
     friends,
     setFriends,
     groups,
@@ -57,11 +73,14 @@ export default function ChatPage() {
   const [showFriendRequests, setShowFriendRequests] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [pendingFriendRequests, setPendingFriendRequests] = useState<Friendship[]>([]);
-  const [hasUnseenFriendRequests, setHasUnseenFriendRequests] = useState(false);
   const [showGroupSettings, setShowGroupSettings] = useState(false);
   const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [workspaceSwitcherJoinMode, setWorkspaceSwitcherJoinMode] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const seenFriendRequestIdsRef = useRef<Record<string, Set<string>>>({});
+  const typingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const markConversationReadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lang = useLang();
   const t = getTranslations(lang);
   const withLang = useLangHref();
@@ -94,21 +113,458 @@ export default function ChatPage() {
     return seenFriendRequestIdsRef.current[workspaceId];
   };
 
-  const refreshFriendRequests = async (workspaceId: string) => {
+  const incomingPendingFriendRequests =
+    currentWorkspace && user
+      ? pendingFriendRequests.filter(
+          (request) => request.receiverId === user.id && request.status === 'pending'
+        )
+      : [];
+  const hasUnseenFriendRequests =
+    currentWorkspace && user
+      ? incomingPendingFriendRequests.some(
+          (request) => !getSeenRequestIds(currentWorkspace.id).has(request.id)
+        )
+      : false;
+
+  const refreshFriendRequests = useCallback(async (workspaceId: string) => {
     if (!user) return;
     const response = await api.getFriendRequests(workspaceId);
     if (response.success && response.data) {
-      const requests = response.data as Friendship[];
-      setPendingFriendRequests(requests);
-
-      const incomingRequests = requests.filter(
-        (request) => request.receiverId === user.id && request.status === 'pending'
-      );
-      const seenSet = getSeenRequestIds(workspaceId);
-      const hasUnseen = incomingRequests.some((request) => !seenSet.has(request.id));
-      setHasUnseenFriendRequests(hasUnseen);
+      setPendingFriendRequests(response.data as Friendship[]);
     }
-  };
+  }, [user]);
+
+  const upsertPendingFriendRequest = useCallback((friendship: Friendship) => {
+    setPendingFriendRequests((currentRequests) => {
+      const nextRequests = currentRequests.filter((request) => request.id !== friendship.id);
+      return [friendship, ...nextRequests];
+    });
+  }, []);
+
+  const removePendingFriendRequest = useCallback((friendshipId: string) => {
+    setPendingFriendRequests((currentRequests) =>
+      currentRequests.filter((request) => request.id !== friendshipId)
+    );
+  }, []);
+
+  const buildAcceptedFriendship = useCallback((friendship: Friendship) => {
+    if (!user) {
+      return null;
+    }
+
+    const otherUser =
+      friendship.senderId === user.id ? friendship.receiver : friendship.sender;
+    if (!otherUser) {
+      return null;
+    }
+
+    const workspaceMember = workspaceMembers.find((member) => member.userId === otherUser.id);
+    return {
+      ...friendship,
+      friend: {
+        ...otherUser,
+        isOnline: workspaceMember?.user?.isOnline ?? otherUser.isOnline,
+        lastSeenAt:
+          workspaceMember?.user?.lastSeenAt ||
+          workspaceMember?.lastSeenAt ||
+          otherUser.lastSeenAt,
+      },
+      unreadCount: friendship.unreadCount ?? 0,
+    };
+  }, [user, workspaceMembers]);
+
+  const upsertAcceptedFriendship = useCallback((friendship: Friendship) => {
+    const nextFriendship = buildAcceptedFriendship(friendship);
+    if (!nextFriendship?.friend?.id) {
+      return;
+    }
+
+    setFriends((currentFriends) => {
+      const existingFriendship = currentFriends.find(
+        (currentFriendship) => currentFriendship.friend?.id === nextFriendship.friend?.id
+      );
+
+      if (!existingFriendship) {
+        return [nextFriendship, ...currentFriends];
+      }
+
+      return currentFriends.map((currentFriendship) =>
+        currentFriendship.friend?.id === nextFriendship.friend?.id
+          ? {
+              ...currentFriendship,
+              ...nextFriendship,
+              friend: {
+                ...currentFriendship.friend,
+                ...nextFriendship.friend,
+              },
+              lastMessage: currentFriendship.lastMessage || nextFriendship.lastMessage,
+              unreadCount: currentFriendship.unreadCount ?? nextFriendship.unreadCount ?? 0,
+            }
+          : currentFriendship
+      );
+    });
+  }, [buildAcceptedFriendship, setFriends]);
+
+  const upsertGroupSummary = useCallback((group: Group) => {
+    setGroups((currentGroups) => {
+      const existingGroup = currentGroups.find(
+        (currentGroupItem) => currentGroupItem.id === group.id
+      );
+
+      if (!existingGroup) {
+        return [group, ...currentGroups];
+      }
+
+      return currentGroups.map((currentGroupItem) =>
+        currentGroupItem.id === group.id
+          ? {
+              ...currentGroupItem,
+              ...group,
+              lastMessage: currentGroupItem.lastMessage || group.lastMessage,
+              unreadCount: currentGroupItem.unreadCount ?? group.unreadCount ?? 0,
+            }
+          : currentGroupItem
+      );
+    });
+  }, [setGroups]);
+
+  const removeGroupSummary = useCallback((groupId: string) => {
+    setGroups((currentGroups) =>
+      currentGroups.filter((currentGroupItem) => currentGroupItem.id !== groupId)
+    );
+
+    if (currentConversationType === 'group' && currentConversationId === groupId) {
+      setCurrentConversation(null, null);
+      setMessages([]);
+      setShowGroupSettings(false);
+    }
+  }, [
+    currentConversationId,
+    currentConversationType,
+    setCurrentConversation,
+    setGroups,
+    setMessages,
+  ]);
+
+  const upsertWorkspaceMember = useCallback((member: WorkspaceMember) => {
+    setWorkspaceMembers((currentMembers) => {
+      const existingMember = currentMembers.find(
+        (currentMember) => currentMember.userId === member.userId
+      );
+
+      if (!existingMember) {
+        return [member, ...currentMembers];
+      }
+
+      return currentMembers.map((currentMember) =>
+        currentMember.userId === member.userId
+          ? {
+              ...currentMember,
+              ...member,
+              user: member.user
+                ? {
+                    ...currentMember.user,
+                    ...member.user,
+                    isOnline: currentMember.user?.isOnline ?? member.user.isOnline,
+                    lastSeenAt: currentMember.user?.lastSeenAt || member.user.lastSeenAt,
+                  }
+                : currentMember.user,
+            }
+          : currentMember
+      );
+    });
+
+    if (member.userId === user?.id) {
+      setCurrentMemberTag(member.memberTag);
+    }
+  }, [user?.id]);
+
+  const applyWorkspaceMemberProfile = useCallback((member: WorkspaceMember) => {
+    upsertWorkspaceMember(member);
+
+    if (!member.user) {
+      return;
+    }
+
+    const nextUser = member.user;
+    const lastSeenAt = member.lastSeenAt;
+
+    if (nextUser.id === user?.id) {
+      setUser({
+        ...user,
+        ...nextUser,
+        isOnline: user.isOnline ?? nextUser.isOnline,
+        lastSeenAt: user.lastSeenAt || lastSeenAt,
+      });
+    }
+
+    setFriends((currentFriends) =>
+      currentFriends.map((friendship) => ({
+        ...friendship,
+        friend:
+          friendship.friend?.id === nextUser.id
+            ? {
+                ...friendship.friend,
+                ...nextUser,
+                isOnline: friendship.friend.isOnline ?? nextUser.isOnline,
+                lastSeenAt: friendship.friend.lastSeenAt || lastSeenAt,
+              }
+            : friendship.friend,
+        sender:
+          friendship.sender?.id === nextUser.id
+            ? {
+                ...friendship.sender,
+                ...nextUser,
+                isOnline: friendship.sender.isOnline ?? nextUser.isOnline,
+                lastSeenAt: friendship.sender.lastSeenAt || lastSeenAt,
+              }
+            : friendship.sender,
+        receiver:
+          friendship.receiver?.id === nextUser.id
+            ? {
+                ...friendship.receiver,
+                ...nextUser,
+                isOnline: friendship.receiver.isOnline ?? nextUser.isOnline,
+                lastSeenAt: friendship.receiver.lastSeenAt || lastSeenAt,
+              }
+            : friendship.receiver,
+      }))
+    );
+
+    setPendingFriendRequests((currentRequests) =>
+      currentRequests.map((request) => ({
+        ...request,
+        sender:
+          request.sender?.id === nextUser.id
+            ? {
+                ...request.sender,
+                ...nextUser,
+                isOnline: request.sender.isOnline ?? nextUser.isOnline,
+                lastSeenAt: request.sender.lastSeenAt || lastSeenAt,
+              }
+            : request.sender,
+        receiver:
+          request.receiver?.id === nextUser.id
+            ? {
+                ...request.receiver,
+                ...nextUser,
+                isOnline: request.receiver.isOnline ?? nextUser.isOnline,
+                lastSeenAt: request.receiver.lastSeenAt || lastSeenAt,
+              }
+            : request.receiver,
+      }))
+    );
+
+    setMessages((currentMessages) =>
+      currentMessages.map((message) =>
+        message.senderId === nextUser.id
+          ? {
+              ...message,
+              senderName: nextUser.username,
+              senderAvatar: nextUser.avatar,
+            }
+          : message
+      )
+    );
+  }, [setFriends, setMessages, upsertWorkspaceMember, user, setUser]);
+
+  const removeWorkspaceMember = useCallback((userId: string) => {
+    const typingTimeout = typingTimeoutsRef.current[userId];
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+      delete typingTimeoutsRef.current[userId];
+    }
+
+    setTypingUserIds((currentIds) => currentIds.filter((currentId) => currentId !== userId));
+    setWorkspaceMembers((currentMembers) =>
+      currentMembers.filter((member) => member.userId !== userId)
+    );
+    setFriends((currentFriends) =>
+      currentFriends.filter((friendship) => friendship.friend?.id !== userId)
+    );
+    setPendingFriendRequests((currentRequests) =>
+      currentRequests.filter(
+        (request) => request.senderId !== userId && request.receiverId !== userId
+      )
+    );
+
+    if (currentConversationType === 'direct' && currentConversationId === userId) {
+      setCurrentConversation(null, null);
+      setMessages([]);
+    }
+  }, [
+    currentConversationId,
+    currentConversationType,
+    setCurrentConversation,
+    setFriends,
+    setMessages,
+  ]);
+
+  const handleCurrentUserRemovedFromWorkspace = useCallback((workspaceId: string) => {
+    if (currentWorkspace?.id !== workspaceId) {
+      return;
+    }
+
+    const nextWorkspaces = workspaces.filter((workspace) => workspace.id !== workspaceId);
+
+    if (showFriendList) {
+      toggleFriendList();
+    }
+
+    if (showWorkspaceSwitcher) {
+      toggleWorkspaceSwitcher();
+    }
+
+    setShowFriendRequests(false);
+    setShowCreateGroup(false);
+    setShowGroupSettings(false);
+    setShowProfileSettings(false);
+    setTypingUserIds([]);
+    setCurrentConversation(null, null);
+    setMessages([]);
+    setFriends([]);
+    setGroups([]);
+    setWorkspaceMembers([]);
+    setPendingFriendRequests([]);
+    setCurrentMemberTag('');
+    setMessagesLoading(false);
+    setWorkspaces(nextWorkspaces);
+    setCurrentWorkspace(nextWorkspaces[0] || null);
+  }, [
+    currentWorkspace?.id,
+    setCurrentConversation,
+    setCurrentWorkspace,
+    setGroups,
+    setMessages,
+    setWorkspaces,
+    showFriendList,
+    showWorkspaceSwitcher,
+    toggleFriendList,
+    toggleWorkspaceSwitcher,
+    workspaces,
+  ]);
+
+  const applyActiveConversationState = useCallback((
+    nextFriends: Friendship[] | null,
+    nextGroups: Group[] | null
+  ) => ({
+    friends:
+      nextFriends?.map((friendship) =>
+        currentConversationType === 'direct' && friendship.friend?.id === currentConversationId
+          ? { ...friendship, unreadCount: 0 }
+          : friendship
+      ) || null,
+    groups:
+      nextGroups?.map((group) =>
+        currentConversationType === 'group' && group.id === currentConversationId
+          ? { ...group, unreadCount: 0 }
+          : group
+      ) || null,
+  }), [currentConversationId, currentConversationType]);
+
+  const clearTypingUser = useCallback((userId: string) => {
+    const timeout = typingTimeoutsRef.current[userId];
+    if (timeout) {
+      clearTimeout(timeout);
+      delete typingTimeoutsRef.current[userId];
+    }
+
+    setTypingUserIds((currentIds) => currentIds.filter((currentId) => currentId !== userId));
+  }, []);
+
+  const updatePresenceForUser = useCallback((userId: string, isOnline: boolean) => {
+    const presenceTimestamp = new Date().toISOString();
+
+    setFriends((currentFriends) =>
+      currentFriends.map((friendship) =>
+        friendship.friend?.id === userId
+          ? {
+              ...friendship,
+              friend: {
+                ...friendship.friend,
+                isOnline,
+                lastSeenAt: presenceTimestamp,
+              },
+            }
+          : friendship
+      )
+    );
+
+    setWorkspaceMembers((currentMembers) =>
+      currentMembers.map((member) =>
+        member.userId === userId
+          ? {
+              ...member,
+              lastSeenAt: presenceTimestamp,
+              user: member.user
+                ? {
+                    ...member.user,
+                    isOnline,
+                    lastSeenAt: presenceTimestamp,
+                  }
+                : member.user,
+            }
+          : member
+      )
+    );
+  }, [setFriends]);
+
+  const handleTypingStartEvent = useCallback((senderId: string) => {
+    if (!senderId || senderId === user?.id) {
+      return;
+    }
+
+    setTypingUserIds((currentIds) =>
+      currentIds.includes(senderId) ? currentIds : [...currentIds, senderId]
+    );
+
+    const timeout = typingTimeoutsRef.current[senderId];
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    typingTimeoutsRef.current[senderId] = setTimeout(() => {
+      clearTypingUser(senderId);
+    }, 3000);
+  }, [clearTypingUser, user?.id]);
+
+  const handleTypingStopEvent = useCallback((senderId: string) => {
+    if (!senderId) {
+      return;
+    }
+
+    clearTypingUser(senderId);
+  }, [clearTypingUser]);
+
+  const scheduleMarkConversationRead = useCallback(() => {
+    if (!currentWorkspace || !currentConversationId || !currentConversationType || !user) {
+      return;
+    }
+
+    if (markConversationReadTimeoutRef.current) {
+      clearTimeout(markConversationReadTimeoutRef.current);
+    }
+
+    markConversationReadTimeoutRef.current = setTimeout(() => {
+      void (async () => {
+        const response = await api.markConversationRead({
+          workspaceId: currentWorkspace.id,
+          receiverId: currentConversationType === 'direct' ? currentConversationId : undefined,
+          groupId: currentConversationType === 'group' ? currentConversationId : undefined,
+        });
+
+        if (response.success && response.data?.messageIds?.length) {
+          markMessagesRead(response.data.messageIds, user.id);
+        }
+      })();
+    }, 120);
+  }, [
+    currentConversationId,
+    currentConversationType,
+    currentWorkspace,
+    markMessagesRead,
+    user,
+  ]);
 
   const openWorkspaceSwitcher = (mode: 'list' | 'join' = 'list') => {
     setWorkspaceSwitcherJoinMode(mode === 'join');
@@ -138,7 +594,6 @@ export default function ChatPage() {
     setGroups([]);
     setWorkspaceMembers([]);
     setPendingFriendRequests([]);
-    setHasUnseenFriendRequests(false);
     setCurrentMemberTag('');
     setMessagesLoading(false);
     setCurrentWorkspace(workspace);
@@ -148,7 +603,257 @@ export default function ChatPage() {
     }
   };
 
-  const { connected: realtimeConnected } = useRealtimeChat();
+  const clearConversationUnread = useCallback((
+    conversationId: string,
+    conversationType: 'direct' | 'group'
+  ) => {
+    if (conversationType === 'direct') {
+      setFriends((currentFriends) =>
+        currentFriends.map((friendship) =>
+          friendship.friend?.id === conversationId
+            ? { ...friendship, unreadCount: 0 }
+            : friendship
+        )
+      );
+      return;
+    }
+
+    setGroups((currentGroups) =>
+      currentGroups.map((group) =>
+        group.id === conversationId
+          ? { ...group, unreadCount: 0 }
+          : group
+      )
+    );
+  }, [setFriends, setGroups]);
+
+  const updateConversationActivity = useCallback((options: {
+    conversationId: string;
+    conversationType: 'direct' | 'group';
+    message: Message;
+    unreadBehavior?: 'preserve' | 'clear' | 'increment';
+  }) => {
+    if (options.conversationType === 'direct') {
+      setFriends((currentFriends) =>
+        currentFriends.map((friendship) =>
+          friendship.friend?.id === options.conversationId
+            ? {
+                ...friendship,
+                lastMessage: options.message,
+                unreadCount:
+                  options.unreadBehavior === 'clear'
+                    ? 0
+                    : options.unreadBehavior === 'increment'
+                      ? (friendship.unreadCount || 0) + 1
+                      : friendship.unreadCount,
+              }
+            : friendship
+        )
+      );
+      return;
+    }
+
+    setGroups((currentGroups) =>
+      currentGroups.map((group) =>
+        group.id === options.conversationId
+          ? {
+              ...group,
+              lastMessage: options.message,
+              unreadCount:
+                options.unreadBehavior === 'clear'
+                  ? 0
+                  : options.unreadBehavior === 'increment'
+                    ? (group.unreadCount || 0) + 1
+                    : group.unreadCount,
+            }
+          : group
+      )
+    );
+  }, [setFriends, setGroups]);
+
+  const handleSelectConversation = useCallback((conversationId: string, conversationType: 'direct' | 'group') => {
+    clearConversationUnread(conversationId, conversationType);
+    setCurrentConversation(conversationId, conversationType);
+  }, [clearConversationUnread, setCurrentConversation]);
+
+  const handleWorkspaceRealtimeMessage = useCallback((message: Message) => {
+    if (!user) {
+      return;
+    }
+
+    const conversationType = message.groupId ? 'group' : 'direct';
+    const conversationId = message.groupId || (
+      message.senderId === user.id ? message.receiverId : message.senderId
+    );
+
+    if (!conversationId) {
+      return;
+    }
+
+    const isActiveConversation =
+      currentConversationId === conversationId &&
+      currentConversationType === conversationType;
+    const isOwnMessage = message.senderId === user.id;
+
+    updateConversationActivity({
+      conversationId,
+      conversationType,
+      message,
+      unreadBehavior: isActiveConversation
+        ? 'clear'
+        : isOwnMessage
+          ? 'preserve'
+          : 'increment',
+    });
+
+    if (isActiveConversation && !isOwnMessage) {
+      scheduleMarkConversationRead();
+    }
+  }, [
+    currentConversationId,
+    currentConversationType,
+    scheduleMarkConversationRead,
+    updateConversationActivity,
+    user,
+  ]);
+
+  const handleFriendRequestEvent = useCallback((payload: FriendRequestEventPayload) => {
+    if (!user) {
+      return;
+    }
+
+    const friendship = payload.friendship;
+    if (!friendship?.id) {
+      return;
+    }
+
+    const isParticipant =
+      friendship.senderId === user.id || friendship.receiverId === user.id;
+    if (!isParticipant) {
+      return;
+    }
+
+    if (payload.action === 'rejected') {
+      removePendingFriendRequest(friendship.id);
+      return;
+    }
+
+    upsertPendingFriendRequest(friendship);
+
+    if (showFriendRequests && friendship.receiverId === user.id) {
+      getSeenRequestIds(payload.workspaceId).add(friendship.id);
+    }
+  }, [removePendingFriendRequest, showFriendRequests, upsertPendingFriendRequest, user]);
+
+  const handleFriendAcceptedEvent = useCallback((payload: FriendAcceptedEventPayload) => {
+    if (!user) {
+      return;
+    }
+
+    const friendship = payload.friendship;
+    if (!friendship?.id) {
+      return;
+    }
+
+    const isParticipant =
+      friendship.senderId === user.id || friendship.receiverId === user.id;
+    if (!isParticipant) {
+      return;
+    }
+
+    removePendingFriendRequest(friendship.id);
+    upsertAcceptedFriendship(friendship);
+  }, [removePendingFriendRequest, upsertAcceptedFriendship, user]);
+
+  const handleGroupCreatedEvent = useCallback((payload: GroupRealtimeEventPayload) => {
+    if (!user || !payload.memberIds.includes(user.id)) {
+      return;
+    }
+
+    upsertGroupSummary(payload.group);
+  }, [upsertGroupSummary, user]);
+
+  const handleGroupUpdatedEvent = useCallback((payload: GroupRealtimeEventPayload) => {
+    if (!user) {
+      return;
+    }
+
+    if (payload.memberIds.includes(user.id)) {
+      upsertGroupSummary(payload.group);
+      return;
+    }
+
+    removeGroupSummary(payload.group.id);
+  }, [removeGroupSummary, upsertGroupSummary, user]);
+
+  const handleGroupDeletedEvent = useCallback((payload: GroupDeletedEventPayload) => {
+    removeGroupSummary(payload.groupId);
+  }, [removeGroupSummary]);
+
+  const handleWorkspaceMemberJoinedEvent = useCallback((
+    payload: WorkspaceMemberJoinedEventPayload
+  ) => {
+    upsertWorkspaceMember(payload.member);
+  }, [upsertWorkspaceMember]);
+
+  const handleWorkspaceMemberRemovedEvent = useCallback((
+    payload: WorkspaceMemberRemovedEventPayload
+  ) => {
+    if (payload.userId === user?.id) {
+      handleCurrentUserRemovedFromWorkspace(payload.workspaceId);
+      return;
+    }
+
+    removeWorkspaceMember(payload.userId);
+  }, [handleCurrentUserRemovedFromWorkspace, removeWorkspaceMember, user?.id]);
+
+  const handleWorkspaceMemberUpdatedEvent = useCallback((
+    payload: WorkspaceMemberUpdatedEventPayload
+  ) => {
+    applyWorkspaceMemberProfile(payload.member);
+  }, [applyWorkspaceMemberProfile]);
+
+  const { connected: realtimeConnected, sendEvent } = useRealtimeChat({
+    onIncomingMessage: (message) => {
+      if (message.senderId !== user?.id) {
+        scheduleMarkConversationRead();
+      }
+    },
+    onMessageRead: (payload) => {
+      if (!payload.userId || !payload.messageIds?.length) {
+        return;
+      }
+
+      markMessagesRead(payload.messageIds, payload.userId);
+    },
+    onTypingStart: (payload) => {
+      if (payload.senderId) {
+        handleTypingStartEvent(payload.senderId);
+      }
+    },
+    onTypingStop: (payload) => {
+      if (payload.senderId) {
+        handleTypingStopEvent(payload.senderId);
+      }
+    },
+  });
+  const { connected: workspaceRealtimeConnected } = useWorkspaceRealtime({
+    onMessage: handleWorkspaceRealtimeMessage,
+    onUserOnline: (userId) => {
+      updatePresenceForUser(userId, true);
+    },
+    onUserOffline: (userId) => {
+      updatePresenceForUser(userId, false);
+    },
+    onFriendRequest: handleFriendRequestEvent,
+    onFriendAccepted: handleFriendAcceptedEvent,
+    onGroupCreated: handleGroupCreatedEvent,
+    onGroupUpdated: handleGroupUpdatedEvent,
+    onGroupDeleted: handleGroupDeletedEvent,
+    onWorkspaceMemberJoined: handleWorkspaceMemberJoinedEvent,
+    onWorkspaceMemberRemoved: handleWorkspaceMemberRemovedEvent,
+    onWorkspaceMemberUpdated: handleWorkspaceMemberUpdatedEvent,
+  });
 
   // Enable message polling for real-time updates (fallback when websocket is down)
   useMessagePolling(3000, !realtimeConnected);
@@ -156,25 +861,43 @@ export default function ChatPage() {
   // Update user's online status every 30 seconds
   useStatusUpdate(30000);
 
-  // Initialize auth from localStorage
+  // Initialize auth from cookie-backed session
   useEffect(() => {
-    const storedToken = localStorage.getItem('token');
-    const storedUser = localStorage.getItem('user');
-    const userType = localStorage.getItem('userType');
+    let cancelled = false;
 
-    if (!storedToken || !storedUser || userType !== 'client') {
+    const bootstrapSession = async () => {
+      setAuthReady(false);
+      api.setToken(null);
+
+      const response = await api.getClientSession();
+      if (cancelled) {
+        return;
+      }
+
+      if (response.success && response.data) {
+        setToken('cookie-session');
+        setUser(response.data);
+        setAuthReady(true);
+        return;
+      }
+
+      reset();
+      setToken(null);
+      setUser(null);
+      setAuthReady(true);
       router.push(withLang('/client/login'));
-      return;
-    }
+    };
 
-    setToken(storedToken);
-    setUser(JSON.parse(storedUser));
-    api.setToken(storedToken);
-  }, [router, setToken, setUser]);
+    void bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reset, router, setToken, setUser, withLang]);
 
   // Load workspaces
   useEffect(() => {
-    if (!token) return;
+    if (!authReady || !user) return;
 
     const loadWorkspaces = async () => {
       setWorkspacesLoading(true);
@@ -191,32 +914,41 @@ export default function ChatPage() {
       }
     };
 
-    loadWorkspaces();
-  }, [token]);
+    void loadWorkspaces();
+  }, [authReady, user, currentWorkspace?.id, setCurrentWorkspace, setWorkspaces]);
 
   // Load friends and groups when workspace changes
   useEffect(() => {
-    if (!currentWorkspace || !token) return;
+    if (!currentWorkspace || !user || workspaceRealtimeConnected) return;
 
+    let cancelled = false;
     const loadData = async () => {
-      // Load friends
-      const friendsResponse = await api.getFriends(currentWorkspace.id);
-      if (friendsResponse.success && friendsResponse.data) {
-        setFriends(friendsResponse.data);
+      const [friendsResponse, groupsResponse, membersResponse] = await Promise.all([
+        api.getFriends(currentWorkspace.id),
+        api.getGroups(currentWorkspace.id),
+        api.getWorkspaceMembers(currentWorkspace.id),
+      ]);
+
+      if (cancelled) {
+        return;
       }
 
-      // Load groups
-      const groupsResponse = await api.getGroups(currentWorkspace.id);
-      if (groupsResponse.success && groupsResponse.data) {
-        setGroups(groupsResponse.data);
+      const nextCollections = applyActiveConversationState(
+        friendsResponse.success && friendsResponse.data ? friendsResponse.data : null,
+        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      );
+
+      if (nextCollections.friends) {
+        setFriends(nextCollections.friends);
       }
 
-      // Load workspace members
-      const membersResponse = await api.getWorkspaceMembers(currentWorkspace.id);
+      if (nextCollections.groups) {
+        setGroups(nextCollections.groups);
+      }
+
       if (membersResponse.success && membersResponse.data) {
         setWorkspaceMembers(membersResponse.data);
 
-        // Find current user's memberTag
         if (user) {
           const currentMember = membersResponse.data.find((m: WorkspaceMember) => m.userId === user.id);
           if (currentMember) {
@@ -226,43 +958,139 @@ export default function ChatPage() {
       }
     };
 
-    loadData();
-  }, [currentWorkspace, token]);
+    void loadData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyActiveConversationState, currentWorkspace?.id, user, setFriends, setGroups]);
 
   useEffect(() => {
-    if (!currentWorkspace || !token || !user) return;
+    if (!currentWorkspace || !user || workspaceRealtimeConnected) return;
 
-    refreshFriendRequests(currentWorkspace.id);
-    const interval = setInterval(() => {
-      refreshFriendRequests(currentWorkspace.id);
-    }, 10000);
+    let cancelled = false;
+    const refreshConversationCollections = async () => {
+      const [friendsResponse, groupsResponse] = await Promise.all([
+        api.getFriends(currentWorkspace.id),
+        api.getGroups(currentWorkspace.id),
+      ]);
 
-    return () => clearInterval(interval);
-  }, [currentWorkspace, token, user]);
+      if (cancelled) {
+        return;
+      }
 
-  // Load messages when conversation changes
-  useEffect(() => {
-    if (!currentWorkspace || !currentConversationId || !token) return;
+      const nextCollections = applyActiveConversationState(
+        friendsResponse.success && friendsResponse.data ? friendsResponse.data : null,
+        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      );
 
-    const loadMessages = async () => {
-      setMessagesLoading(true);
-      try {
-        const response = await api.getMessages(
-          currentWorkspace.id,
-          currentConversationType === 'direct' ? currentConversationId : undefined,
-          currentConversationType === 'group' ? currentConversationId : undefined
-        );
+      if (nextCollections.friends) {
+        setFriends(nextCollections.friends);
+      }
 
-        if (response.success && response.data) {
-          setMessages(response.data);
-        }
-      } finally {
-        setMessagesLoading(false);
+      if (nextCollections.groups) {
+        setGroups(nextCollections.groups);
       }
     };
 
-    loadMessages();
-  }, [currentWorkspace, currentConversationId, currentConversationType, token]);
+    const interval = setInterval(() => {
+      void refreshConversationCollections();
+    }, CONVERSATION_LIST_POLL_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [
+    applyActiveConversationState,
+    currentWorkspace?.id,
+    setFriends,
+    setGroups,
+    user,
+    workspaceRealtimeConnected,
+  ]);
+
+  useEffect(() => {
+    if (!currentWorkspace || !user) return;
+
+    void refreshFriendRequests(currentWorkspace.id);
+  }, [currentWorkspace?.id, user, refreshFriendRequests]);
+
+  useEffect(() => {
+    if (!currentWorkspace || !user || !workspaceRealtimeConnected) return;
+
+    void refreshFriendRequests(currentWorkspace.id);
+  }, [currentWorkspace?.id, refreshFriendRequests, user, workspaceRealtimeConnected]);
+
+  // Load messages when conversation changes
+  useEffect(() => {
+    if (!currentWorkspace || !currentConversationId || !currentConversationType || !user) return;
+
+    let cancelled = false;
+    const loadMessages = async () => {
+      setMessagesLoading(true);
+      try {
+        const response = await api.getMessagesIncremental({
+          workspaceId: currentWorkspace.id,
+          receiverId: currentConversationType === 'direct' ? currentConversationId : undefined,
+          groupId: currentConversationType === 'group' ? currentConversationId : undefined,
+          limit: 100,
+          markRead: true,
+        });
+
+        if (!cancelled && response.success && response.data) {
+          setMessages(response.data);
+          clearConversationUnread(currentConversationId, currentConversationType);
+        }
+      } finally {
+        if (!cancelled) {
+          setMessagesLoading(false);
+        }
+      }
+    };
+
+    void loadMessages();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspace?.id, currentConversationId, currentConversationType, user, clearConversationUnread]);
+
+  useEffect(() => {
+    setTypingUserIds([]);
+    Object.values(typingTimeoutsRef.current).forEach((timeout) => clearTimeout(timeout));
+    typingTimeoutsRef.current = {};
+
+    if (markConversationReadTimeoutRef.current) {
+      clearTimeout(markConversationReadTimeoutRef.current);
+      markConversationReadTimeoutRef.current = null;
+    }
+  }, [currentConversationId, currentConversationType]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(typingTimeoutsRef.current).forEach((timeout) => clearTimeout(timeout));
+      typingTimeoutsRef.current = {};
+
+      if (markConversationReadTimeoutRef.current) {
+        clearTimeout(markConversationReadTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage || !currentConversationId || !currentConversationType) {
+      return;
+    }
+
+    updateConversationActivity({
+      conversationId: currentConversationId,
+      conversationType: currentConversationType,
+      message: lastMessage,
+      unreadBehavior: 'clear',
+    });
+  }, [messages, currentConversationId, currentConversationType, updateConversationActivity]);
 
   // Send message
   const handleSendMessage = async (content: string) => {
@@ -278,6 +1106,12 @@ export default function ChatPage() {
 
     if (response.success && response.data) {
       addMessage(response.data);
+      updateConversationActivity({
+        conversationId: currentConversationId,
+        conversationType: currentConversationType!,
+        message: response.data,
+        unreadBehavior: 'clear',
+      });
     }
     setSendingMessage(false);
   };
@@ -309,6 +1143,12 @@ export default function ChatPage() {
 
       if (response.success && response.data) {
         addMessage(response.data);
+        updateConversationActivity({
+          conversationId: currentConversationId,
+          conversationType: currentConversationType!,
+          message: response.data,
+          unreadBehavior: 'clear',
+        });
       }
     } else {
       alert(t.chat.fileUploadFailed(uploadResponse.error || t.chat.unknownError));
@@ -321,11 +1161,12 @@ export default function ChatPage() {
   const handleJoinWorkspace = async (inviteCode: string) => {
     const response = await api.joinWorkspace(inviteCode);
     if (response.success && response.data) {
-      const exists = workspaces.some((workspace) => workspace.id === response.data.id);
-      const newWorkspaces = exists ? workspaces : [...workspaces, response.data];
+      const joinedWorkspace = response.data;
+      const exists = workspaces.some((workspace) => workspace.id === joinedWorkspace.id);
+      const newWorkspaces = exists ? workspaces : [...workspaces, joinedWorkspace];
       setWorkspaces(newWorkspaces);
-      selectWorkspace(response.data, { closeSwitcher: true });
-      alert(t.chat.joinSuccess(response.data.name));
+      selectWorkspace(joinedWorkspace, { closeSwitcher: true });
+      alert(t.chat.joinSuccess(joinedWorkspace.name));
     } else {
       alert(t.chat.joinFailure(response.error || t.chat.unknownError));
     }
@@ -336,15 +1177,10 @@ export default function ChatPage() {
     if (!currentWorkspace) return;
 
     const response = await api.sendFriendRequest(currentWorkspace.id, userId);
-    if (response.success) {
+    if (response.success && response.data) {
+      upsertPendingFriendRequest(response.data);
       toggleFriendList();
       alert(t.chat.friendRequestSent);
-      refreshFriendRequests(currentWorkspace.id);
-      // Reload friends
-      const friendsResponse = await api.getFriends(currentWorkspace.id);
-      if (friendsResponse.success && friendsResponse.data) {
-        setFriends(friendsResponse.data);
-      }
     } else {
       // Show the specific error message from the API
       alert(t.chat.friendRequestFailed(response.error || t.chat.unknownError));
@@ -358,9 +1194,25 @@ export default function ChatPage() {
       .map((request) => request.id);
     const seenSet = getSeenRequestIds(currentWorkspace.id);
     incomingIds.forEach((id) => seenSet.add(id));
-    setHasUnseenFriendRequests(false);
     setShowFriendRequests(true);
   };
+
+  const handleFriendRequestAction = useCallback(async (
+    friendshipId: string,
+    status: 'accepted' | 'rejected'
+  ) => {
+    const response = await api.respondToFriendRequest(friendshipId, status);
+    if (!response.success) {
+      alert(t.chat.friendRequestFailed(response.error || t.chat.unknownError));
+      return;
+    }
+
+    removePendingFriendRequest(friendshipId);
+
+    if (status === 'accepted' && response.data) {
+      upsertAcceptedFriendship(response.data);
+    }
+  }, [removePendingFriendRequest, t.chat, upsertAcceptedFriendship]);
 
   // Create group
   const handleCreateGroup = async (name: string, memberIds: string[]) => {
@@ -372,12 +1224,8 @@ export default function ChatPage() {
       memberIds,
     });
 
-    if (response.success) {
-      // Reload groups
-      const groupsResponse = await api.getGroups(currentWorkspace.id);
-      if (groupsResponse.success && groupsResponse.data) {
-        setGroups(groupsResponse.data);
-      }
+    if (response.success && response.data) {
+      upsertGroupSummary(response.data);
     } else {
       alert(t.chat.createGroupFailed(response.error || t.chat.unknownError));
     }
@@ -392,11 +1240,8 @@ export default function ChatPage() {
       name,
     });
 
-    if (response.success) {
-      const groupsResponse = await api.getGroups(currentWorkspace.id);
-      if (groupsResponse.success && groupsResponse.data) {
-        setGroups(groupsResponse.data);
-      }
+    if (response.success && response.data) {
+      upsertGroupSummary(response.data);
     } else {
       alert(t.groupSettings.renameFailed(response.error || t.chat.unknownError));
     }
@@ -411,15 +1256,8 @@ export default function ChatPage() {
     });
 
     if (response.success) {
-      const groupsResponse = await api.getGroups(currentWorkspace.id);
-      if (groupsResponse.success && groupsResponse.data) {
-        setGroups(groupsResponse.data);
-      }
+      removeGroupSummary(currentGroup.id);
       setShowGroupSettings(false);
-      if (currentConversationId === currentGroup.id) {
-        setCurrentConversation(null, null);
-        setMessages([]);
-      }
     } else {
       alert(t.groupSettings.leaveFailed(response.error || t.chat.unknownError));
     }
@@ -430,8 +1268,20 @@ export default function ChatPage() {
 
     const response = await api.updateProfile(data);
     if (response.success && response.data) {
-      setUser(response.data);
-      localStorage.setItem('user', JSON.stringify(response.data));
+      const updatedUser = response.data;
+      setUser(updatedUser);
+      const currentWorkspaceMember = workspaceMembers.find(
+        (member) => member.userId === updatedUser.id
+      );
+      if (currentWorkspaceMember) {
+        applyWorkspaceMemberProfile({
+          ...currentWorkspaceMember,
+          user: {
+            ...currentWorkspaceMember.user,
+            ...updatedUser,
+          },
+        });
+      }
       setShowProfileSettings(false);
     } else {
       alert(t.profileSettings.saveFailed(response.error || t.chat.unknownError));
@@ -439,10 +1289,10 @@ export default function ChatPage() {
   };
 
   // Logout
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    localStorage.removeItem('userType');
+  const handleLogout = async () => {
+    await api.logoutClient();
+    api.setToken(null);
+    setToken(null);
     reset();
     router.push(withLang('/client/login'));
   };
@@ -467,11 +1317,44 @@ export default function ChatPage() {
   };
 
   const conversation = getCurrentConversation();
+  const currentFriend =
+    currentConversationType === 'direct'
+      ? friends.find((friendship) => friendship.friend?.id === currentConversationId)?.friend || null
+      : null;
   const currentGroup =
     currentConversationType === 'group'
       ? groups.find((group) => group.id === currentConversationId) || null
       : null;
+  const typingUsers = typingUserIds
+    .map((typingUserId) => {
+      if (currentConversationType === 'direct') {
+        const friendship = friends.find((friendship) => friendship.friend?.id === typingUserId);
+        return friendship?.friend?.username
+          ? { id: typingUserId, name: friendship.friend.username }
+          : null;
+      }
+
+      const workspaceMember = workspaceMembers.find((member) => member.userId === typingUserId);
+      return workspaceMember?.user?.username
+        ? { id: typingUserId, name: workspaceMember.user.username }
+        : null;
+    })
+    .filter((typingUser): typingUser is { id: string; name: string } => Boolean(typingUser));
   const hasActiveConversation = Boolean(conversation && user);
+
+  if (!authReady) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-100">
+        <div className="text-center text-gray-500">
+          <div
+            className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-b-2"
+            style={{ borderBottomColor: primaryColor }}
+          />
+          <p className="text-sm">{t.auth.common.pleaseWait}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen flex flex-col bg-gray-100" style={themeStyle}>
@@ -672,7 +1555,7 @@ export default function ChatPage() {
               currentConversationType={currentConversationType}
               onSelectWorkspace={(workspace) => selectWorkspace(workspace)}
               onJoinWorkspace={() => openWorkspaceSwitcher('join')}
-              onSelectConversation={setCurrentConversation}
+              onSelectConversation={handleSelectConversation}
             />
           </div>
         </div>
@@ -722,6 +1605,25 @@ export default function ChatPage() {
               loading={messagesLoading}
               inputDisabled={sendingMessage}
               uploading={uploadingFile}
+              isOnline={
+                currentFriend
+                  ? currentFriend.isOnline ?? isUserOnline(currentFriend.lastSeenAt)
+                  : undefined
+              }
+              lastSeen={currentFriend?.lastSeenAt}
+              typingUsers={typingUsers}
+              onTypingStart={() => {
+                sendEvent({
+                  type: 'typing_start',
+                  payload: {},
+                });
+              }}
+              onTypingStop={() => {
+                sendEvent({
+                  type: 'typing_stop',
+                  payload: {},
+                });
+              }}
             />
           ) : (
             <div className="h-full flex items-center justify-center bg-gray-50 text-gray-500">
@@ -759,7 +1661,7 @@ export default function ChatPage() {
         />
       )}
 
-      {showFriendList && (
+      {showFriendList && currentWorkspace && (
         <FriendList
           members={workspaceMembers}
           currentUserId={user?.id || ''}
@@ -777,17 +1679,9 @@ export default function ChatPage() {
 
       {showFriendRequests && user && currentWorkspace && (
         <FriendRequests
-          workspaceId={currentWorkspace.id}
-          userId={user.id}
+          requests={incomingPendingFriendRequests}
           onClose={() => setShowFriendRequests(false)}
-          onRequestHandled={async () => {
-            // Reload friends list after accepting/rejecting a request
-            const friendsResponse = await api.getFriends(currentWorkspace.id);
-            if (friendsResponse.success && friendsResponse.data) {
-              setFriends(friendsResponse.data);
-            }
-            refreshFriendRequests(currentWorkspace.id);
-          }}
+          onRequestHandled={handleFriendRequestAction}
         />
       )}
 

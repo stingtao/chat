@@ -1,36 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyToken } from '@/lib/auth';
+import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
 
 // Get workspace members
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const token = request.headers.get('authorization')?.replace('Bearer ', '');
-    if (!token) {
+    const payload = await authenticateNextRequest(request, 'host');
+    if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
     }
-
-    const payload = await verifyToken(token);
-    if (!payload || payload.type !== 'host') {
-      return NextResponse.json(
-        { success: false, error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
+    const { id } = await params;
 
     // Verify ownership
     const workspace = await prisma.workspace.findFirst({
       where: {
-        id: params.id,
+        id,
         hostId: payload.userId,
       },
     });
@@ -43,7 +36,7 @@ export async function GET(
     }
 
     const members = await prisma.workspaceMember.findMany({
-      where: { workspaceId: params.id },
+      where: { workspaceId: id },
       include: {
         user: {
           select: {

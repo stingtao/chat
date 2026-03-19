@@ -29,6 +29,10 @@ export function buildRoomName({
   return `workspace:${workspaceId}:direct:${first}:${second}`;
 }
 
+export function buildWorkspaceRoomName(workspaceId: string): string {
+  return `workspace:${workspaceId}:feed`;
+}
+
 export async function broadcastToRoom(options: {
   roomName: string;
   message: WSMessage;
