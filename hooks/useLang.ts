@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { appendLangToHref, Lang, normalizeLang } from '@/lib/i18n';
 
@@ -10,5 +11,5 @@ export function useLang(): Lang {
 
 export function useLangHref() {
   const lang = useLang();
-  return (href: string) => appendLangToHref(href, lang);
+  return useCallback((href: string) => appendLangToHref(href, lang), [lang]);
 }
