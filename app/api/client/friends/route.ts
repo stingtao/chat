@@ -13,7 +13,6 @@ const FRIEND_USER_SELECT = {
   id: true,
   username: true,
   avatar: true,
-  email: true,
 } as const;
 
 async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) {

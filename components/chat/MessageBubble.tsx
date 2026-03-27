@@ -1,5 +1,6 @@
 import { Message } from '@/lib/types';
 import { formatTime, getInitials, parseReadBy } from '@/lib/utils';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface MessageBubbleProps {
   message: Message;
@@ -53,9 +54,9 @@ export default function MessageBubble({ message, isOwn, showReadReceipt = false 
       }`}
     >
       {!isOwn && (
-        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-xs font-semibold">
+        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-xs font-semibold relative overflow-hidden">
           {message.senderAvatar ? (
-            <img
+            <ClientImage
               src={message.senderAvatar}
               alt={message.senderName || 'User'}
               className="w-full h-full rounded-full object-cover"
@@ -85,7 +86,7 @@ export default function MessageBubble({ message, isOwn, showReadReceipt = false 
         )}
 
         {message.type === 'image' && message.fileUrl && (
-          <img
+          <ClientImage
             src={message.fileUrl}
             alt="Shared image"
             className="rounded-lg max-w-full mb-1"

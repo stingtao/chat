@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Prisma } from '@prisma/client';
+import { getCloudflareEnv } from '@/lib/cloudflare';
 import { getPrismaClientFromContext } from '@/lib/db';
 import {
   broadcastToRoom,
   buildRoomName,
-  buildWorkspaceRoomName,
 } from '@/lib/realtime';
 import type { WSMessage } from '@/lib/types';
 import {
@@ -24,6 +25,7 @@ import {
   parseConversationNotificationData,
   parseReadBy,
 } from '@/lib/utils';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 
@@ -183,7 +185,8 @@ async function applyMessageReadReceipts(options: {
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const payload = await authenticateNextRequest(request, 'client');
+    const env = getCloudflareEnv();
+    const payload = await authenticateNextRequest(request, 'client', prisma);
     if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -239,6 +242,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Attachment URL is required for this message type' },
         { status: 400 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'message_send',
+      limit: 40,
+      windowMs: 60 * 1000,
+      identifierParts: [payload.userId, workspaceId],
+      errorMessage: 'You are sending messages too quickly. Please slow down.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     const hasReceiver = Boolean(receiverId);
@@ -409,13 +425,6 @@ export async function POST(request: NextRequest) {
     void broadcastToRoom({ roomName, message: wsMessage }).catch((error) => {
       console.error('Broadcast message error:', error);
     });
-    void broadcastToRoom({
-      roomName: buildWorkspaceRoomName(workspaceId),
-      message: wsMessage,
-    }).catch((error) => {
-      console.error('Broadcast workspace feed error:', error);
-    });
-
     // Send push notifications to offline recipients
     void (async () => {
       try {
@@ -442,10 +451,9 @@ export async function POST(request: NextRequest) {
           groupName
         );
 
-        // Get FCM config from environment (placeholder - need actual env access)
         const fcmEnv = {
-          FCM_PROJECT_ID: process.env.FCM_PROJECT_ID,
-          FCM_SERVER_KEY: process.env.FCM_SERVER_KEY,
+          FCM_PROJECT_ID: env?.FCM_PROJECT_ID || process.env.FCM_PROJECT_ID,
+          FCM_SERVER_KEY: env?.FCM_SERVER_KEY || process.env.FCM_SERVER_KEY,
         };
 
         // Send push notifications
@@ -547,7 +555,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Build query
-    const where: any = { workspaceId };
+    const where: Prisma.MessageWhereInput = { workspaceId };
     if (afterDate) {
       where.createdAt = { gt: afterDate };
     }

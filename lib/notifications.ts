@@ -15,6 +15,14 @@ export interface SendNotificationResult {
   error?: string;
 }
 
+interface FCMResponse {
+  success?: number;
+  message_id?: string;
+  results?: Array<{
+    error?: string;
+  }>;
+}
+
 // FCM HTTP v1 API endpoint
 const FCM_API_URL = 'https://fcm.googleapis.com/v1/projects/{project_id}/messages:send';
 
@@ -63,7 +71,7 @@ export async function sendPushNotification(
       return { success: false, error: errorText };
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as FCMResponse;
 
     if (result.success === 1) {
       return { success: true, messageId: result.message_id };

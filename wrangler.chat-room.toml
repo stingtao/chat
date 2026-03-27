@@ -6,6 +6,11 @@ account_id = "71184b988be37c368ead7c17a3055918"
 [durable_objects]
 bindings = [{ name = "CHAT_ROOM", class_name = "ChatRoom" }]
 
+[[d1_databases]]
+binding = "DB"
+database_name = "chat-db"
+database_id = "a3738f36-159f-4ca4-8647-f90c8ce78c92"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["ChatRoom"]

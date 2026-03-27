@@ -6,6 +6,7 @@ import type { ClientUser } from '@/lib/types';
 import { getInitials } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface ProfileSettingsProps {
   user: ClientUser;
@@ -90,9 +91,9 @@ export default function ProfileSettings({
 
         <div className="space-y-5">
           <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-lg font-semibold overflow-hidden">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-lg font-semibold overflow-hidden relative">
               {avatar ? (
-                <img
+                <ClientImage
                   src={avatar}
                   alt={username}
                   className="w-full h-full object-cover"

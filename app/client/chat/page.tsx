@@ -33,6 +33,7 @@ import {
 import { getContrastColor, hexToRgba, isUserOnline, normalizeHexColor } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang, useLangHref } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 const CONVERSATION_LIST_POLL_INTERVAL_MS = 8000;
 
@@ -895,6 +896,34 @@ export default function ChatPage() {
     };
   }, [reset, router, setToken, setUser, withLang]);
 
+  useEffect(() => {
+    if (!authReady || !user) return;
+
+    let cancelled = false;
+
+    const verifySession = async () => {
+      const response = await api.getClientSession();
+      if (cancelled || (response.success && response.data)) {
+        return;
+      }
+
+      reset();
+      setToken(null);
+      setUser(null);
+      router.push(withLang('/client/login'));
+    };
+
+    void verifySession();
+    const interval = setInterval(() => {
+      void verifySession();
+    }, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authReady, reset, router, setToken, setUser, user, withLang]);
+
   // Load workspaces
   useEffect(() => {
     if (!authReady || !user) return;
@@ -919,7 +948,7 @@ export default function ChatPage() {
 
   // Load friends and groups when workspace changes
   useEffect(() => {
-    if (!currentWorkspace || !user || workspaceRealtimeConnected) return;
+    if (!currentWorkspace || !user) return;
 
     let cancelled = false;
     const loadData = async () => {
@@ -966,7 +995,7 @@ export default function ChatPage() {
   }, [applyActiveConversationState, currentWorkspace?.id, user, setFriends, setGroups]);
 
   useEffect(() => {
-    if (!currentWorkspace || !user || workspaceRealtimeConnected) return;
+    if (!currentWorkspace || !user) return;
 
     let cancelled = false;
     const refreshConversationCollections = async () => {
@@ -1007,7 +1036,6 @@ export default function ChatPage() {
     setFriends,
     setGroups,
     user,
-    workspaceRealtimeConnected,
   ]);
 
   useEffect(() => {
@@ -1376,7 +1404,7 @@ export default function ChatPage() {
             title={hasWorkspace ? t.workspaceSwitcher.title : t.chat.joinWorkspace}
           >
             {workspaceLogo ? (
-              <img
+              <ClientImage
                 src={workspaceLogo}
                 alt={workspaceName}
                 className="w-full h-full object-cover"

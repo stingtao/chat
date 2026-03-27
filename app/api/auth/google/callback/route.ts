@@ -99,6 +99,7 @@ export async function GET(request: NextRequest) {
         userId: host.id,
         email: host.email,
         type: 'host',
+        sessionVersion: host.sessionVersion,
       });
 
       user = {
@@ -147,6 +148,7 @@ export async function GET(request: NextRequest) {
         userId: client.id,
         email: client.email,
         type: 'client',
+        sessionVersion: client.sessionVersion,
       });
 
       user = {

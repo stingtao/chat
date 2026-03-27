@@ -7,7 +7,7 @@ export interface HostUser {
 
 export interface ClientUser {
   id: string;
-  email: string;
+  email?: string;
   username: string;
   avatar?: string;
   isOnline?: boolean;
@@ -178,7 +178,7 @@ export interface SpamReport {
 }
 
 // API response types
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
@@ -207,6 +207,6 @@ export type WSMessageType =
 
 export interface WSMessage {
   type: WSMessageType;
-  payload: any;
+  payload: Record<string, unknown> | null;
   timestamp: number;
 }

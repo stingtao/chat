@@ -1,2 +1,4 @@
 JWT_SECRET="your-secret-key-change-in-production"
 DATABASE_URL="file:./dev.db"
+FCM_PROJECT_ID="your-firebase-project-id"
+FCM_SERVER_KEY="your-fcm-server-key"

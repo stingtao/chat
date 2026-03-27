@@ -6,18 +6,34 @@ import {
   sanitizeStoragePathSegment,
 } from '@/lib/utils';
 import { authenticateNextRequestTypes } from '@/lib/session';
+import { getPrismaClientFromContext } from '@/lib/db';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
   try {
     const env = getCloudflareEnv();
-    const payload = await authenticateNextRequestTypes(request, ['client', 'host']);
+    const prisma = await getPrismaClientFromContext();
+    const payload = await authenticateNextRequestTypes(request, ['client', 'host'], prisma);
     if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'file_upload',
+      limit: 20,
+      windowMs: 15 * 60 * 1000,
+      identifierParts: [payload.type, payload.userId],
+      errorMessage: 'Too many uploads. Please wait before uploading again.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     const formData = await request.formData();
@@ -90,20 +106,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Generate public URL
-    const publicBaseUrl = env?.R2_PUBLIC_BASE_URL || process.env.R2_PUBLIC_BASE_URL;
-    if (!publicBaseUrl) {
-      return NextResponse.json(
-        { success: false, error: 'Public storage URL not configured' },
-        { status: 500 }
-      );
-    }
-    const publicUrl = `${publicBaseUrl.replace(/\/$/, '')}/${fileName}`;
+    const protectedUrl = `/api/files/${fileName
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')}`;
 
     return NextResponse.json({
       success: true,
       data: {
-        url: publicUrl,
+        url: protectedUrl,
         fileName: file.name,
         size: file.size,
         type: file.type,

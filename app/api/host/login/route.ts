@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { verifyPassword, generateToken } from '@/lib/auth';
+import { generateToken } from '@/lib/auth';
+import { verifyPassword } from '@/lib/password';
 import { normalizeTextInput } from '@/lib/utils';
 import { applySessionCookie } from '@/lib/session';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 
@@ -18,6 +20,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Email and password are required' },
         { status: 400 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'host_login',
+      limit: 6,
+      windowMs: 15 * 60 * 1000,
+      identifierParts: [email],
+      errorMessage: 'Too many login attempts. Please try again later.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     // Find host
@@ -57,6 +72,7 @@ export async function POST(request: NextRequest) {
       userId: host.id,
       email: host.email,
       type: 'host',
+      sessionVersion: host.sessionVersion,
     });
 
     const response = NextResponse.json({

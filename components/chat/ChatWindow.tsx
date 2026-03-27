@@ -6,6 +6,7 @@ import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface ChatWindowProps {
   conversationName: string;
@@ -171,9 +172,9 @@ export default function ChatWindow({
             </svg>
           </button>
         )}
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
+        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0 relative overflow-hidden">
           {conversationAvatar ? (
-            <img
+            <ClientImage
               src={conversationAvatar}
               alt={conversationName}
               className="w-full h-full rounded-full object-cover"

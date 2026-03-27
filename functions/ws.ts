@@ -5,6 +5,7 @@ import type {
 } from '@cloudflare/workers-types';
 import { getPrismaClient } from '../lib/db';
 import { getSessionCookieName, verifyToken } from '../lib/auth';
+import { validateSessionPayload } from '../lib/session';
 import {
   buildRoomName,
   buildWorkspaceRoomName,
@@ -64,6 +65,10 @@ export const onRequest = (async ({ request, env }) => {
   }
 
   const prisma = await getPrismaClient(env.DB);
+  const isValidSession = await validateSessionPayload(prisma, payload);
+  if (!isValidSession) {
+    return new Response('Unauthorized', { status: 401 });
+  }
 
   let roomName: string | null = null;
   if (scope === 'workspace' && payload.type === 'host') {
@@ -182,7 +187,15 @@ export const onRequest = (async ({ request, env }) => {
 
   const headers = new Headers(request.headers as any);
   headers.set('x-user-id', payload.userId);
+  headers.set('x-user-type', payload.type);
+  headers.set('x-session-version', String(payload.sessionVersion ?? 0));
   headers.set('x-room-name', roomName);
+  headers.set(
+    'x-allowed-client-events',
+    payload.type === 'client' && scope !== 'workspace'
+      ? 'typing_start,typing_stop'
+      : ''
+  );
 
   const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(roomName));
   return stub.fetch(new Request(forwardUrl.toString(), { headers: headers as any }) as any) as any;

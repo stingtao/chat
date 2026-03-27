@@ -6,6 +6,7 @@ import { useWorkspaceRealtime } from '@/hooks/useWorkspaceRealtime';
 import { getTranslations } from '@/lib/i18n';
 import { useLang, useLangHref } from '@/hooks/useLang';
 import { BlockedUser, HostUser, SpamReport, Workspace, WorkspaceMember } from '@/lib/types';
+import ClientImage from '@/components/ui/ClientImage';
 
 export default function HostDashboardPage() {
   const router = useRouter();
@@ -88,6 +89,44 @@ export default function HostDashboardPage() {
       cancelled = true;
     };
   }, [router, withLang]);
+
+  useEffect(() => {
+    if (!authReady || !user) return;
+
+    let cancelled = false;
+
+    const verifySession = async () => {
+      try {
+        const response = await fetch('/api/host/session');
+        const data = (await response.json()) as {
+          success: boolean;
+          data?: HostUser;
+        };
+
+        if (cancelled || data.success) {
+          return;
+        }
+
+        setUser(null);
+        router.push(withLang('/host/login'));
+      } catch {
+        if (!cancelled) {
+          setUser(null);
+          router.push(withLang('/host/login'));
+        }
+      }
+    };
+
+    void verifySession();
+    const interval = setInterval(() => {
+      void verifySession();
+    }, 30000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [authReady, router, user, withLang]);
 
   // Load workspaces
   useEffect(() => {
@@ -1138,9 +1177,9 @@ export default function HostDashboardPage() {
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-[auto,1fr] gap-4 items-center">
-                          <div className="w-20 h-20 rounded-2xl bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden">
+                          <div className="w-20 h-20 rounded-2xl bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden relative">
                             {settingsForm.logo ? (
-                              <img
+                              <ClientImage
                                 src={settingsForm.logo}
                                 alt={t.hostDashboard.settings.logoLabel}
                                 className="w-full h-full object-cover"

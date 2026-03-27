@@ -154,7 +154,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'new_message') {
-        const payload = message.payload as Message;
+        const payload = message.payload as unknown as Message;
         if (!payload?.id || payload.workspaceId !== workspaceId) {
           return;
         }
@@ -180,7 +180,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'friend_request') {
-        const payload = message.payload as FriendRequestEventPayload | undefined;
+        const payload = message.payload as unknown as FriendRequestEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.friendship?.id) {
           callbacksRef.current.onFriendRequest?.(payload);
         }
@@ -188,7 +188,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'friend_accepted') {
-        const payload = message.payload as FriendAcceptedEventPayload | undefined;
+        const payload = message.payload as unknown as FriendAcceptedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.friendship?.id) {
           callbacksRef.current.onFriendAccepted?.(payload);
         }
@@ -196,7 +196,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'group_created') {
-        const payload = message.payload as GroupRealtimeEventPayload | undefined;
+        const payload = message.payload as unknown as GroupRealtimeEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.group?.id) {
           callbacksRef.current.onGroupCreated?.(payload);
         }
@@ -204,7 +204,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'group_updated') {
-        const payload = message.payload as GroupRealtimeEventPayload | undefined;
+        const payload = message.payload as unknown as GroupRealtimeEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.group?.id) {
           callbacksRef.current.onGroupUpdated?.(payload);
         }
@@ -212,7 +212,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'group_deleted') {
-        const payload = message.payload as GroupDeletedEventPayload | undefined;
+        const payload = message.payload as unknown as GroupDeletedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.groupId) {
           callbacksRef.current.onGroupDeleted?.(payload);
         }
@@ -220,7 +220,8 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'workspace_member_joined') {
-        const payload = message.payload as WorkspaceMemberJoinedEventPayload | undefined;
+        const payload =
+          message.payload as unknown as WorkspaceMemberJoinedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.member?.userId) {
           callbacksRef.current.onWorkspaceMemberJoined?.(payload);
         }
@@ -228,7 +229,8 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'workspace_member_removed') {
-        const payload = message.payload as WorkspaceMemberRemovedEventPayload | undefined;
+        const payload =
+          message.payload as unknown as WorkspaceMemberRemovedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.userId) {
           callbacksRef.current.onWorkspaceMemberRemoved?.(payload);
         }
@@ -236,7 +238,8 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'workspace_member_updated') {
-        const payload = message.payload as WorkspaceMemberUpdatedEventPayload | undefined;
+        const payload =
+          message.payload as unknown as WorkspaceMemberUpdatedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.member?.userId) {
           callbacksRef.current.onWorkspaceMemberUpdated?.(payload);
         }
@@ -244,7 +247,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'spam_report_created') {
-        const payload = message.payload as SpamReportRealtimeEventPayload | undefined;
+        const payload = message.payload as unknown as SpamReportRealtimeEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.report?.id) {
           callbacksRef.current.onSpamReportCreated?.(payload);
         }
@@ -252,7 +255,7 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'spam_report_updated') {
-        const payload = message.payload as SpamReportRealtimeEventPayload | undefined;
+        const payload = message.payload as unknown as SpamReportRealtimeEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.report?.id) {
           callbacksRef.current.onSpamReportUpdated?.(payload);
         }
@@ -260,7 +263,8 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'workspace_member_blocked') {
-        const payload = message.payload as WorkspaceMemberBlockedEventPayload | undefined;
+        const payload =
+          message.payload as unknown as WorkspaceMemberBlockedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.blockedUser?.userId) {
           callbacksRef.current.onWorkspaceMemberBlocked?.(payload);
         }
@@ -268,7 +272,8 @@ export function useWorkspaceRealtime(options: {
       }
 
       if (message.type === 'workspace_member_unblocked') {
-        const payload = message.payload as WorkspaceMemberUnblockedEventPayload | undefined;
+        const payload =
+          message.payload as unknown as WorkspaceMemberUnblockedEventPayload | undefined;
         if (payload?.workspaceId === workspaceId && payload.userId) {
           callbacksRef.current.onWorkspaceMemberUnblocked?.(payload);
         }

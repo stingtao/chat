@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Workspace } from '@/lib/types';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface WorkspaceSwitcherProps {
   workspaces: Workspace[];
@@ -88,13 +89,13 @@ export default function WorkspaceSwitcher({
               }
             >
               <div
-                className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0"
+                className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0 relative overflow-hidden"
                 style={{
                   backgroundColor: workspace.settings?.primaryColor || '#3b82f6',
                 }}
               >
                 {workspace.settings?.logo ? (
-                  <img
+                  <ClientImage
                     src={workspace.settings.logo}
                     alt={workspace.name}
                     className="w-full h-full rounded-xl object-cover"

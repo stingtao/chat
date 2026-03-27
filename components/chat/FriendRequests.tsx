@@ -5,6 +5,7 @@ import type { Friendship } from '@/lib/types';
 import { getInitials } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface FriendRequestsProps {
   requests: Friendship[];
@@ -86,9 +87,9 @@ export default function FriendRequests({
                   key={request.id}
                   className="p-4 rounded-xl flex items-center gap-3 hover:bg-gray-50 transition-colors mb-2"
                 >
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold flex-shrink-0 relative overflow-hidden">
                     {sender.avatar ? (
-                      <img
+                      <ClientImage
                         src={sender.avatar}
                         alt={sender.username}
                         className="w-full h-full rounded-full object-cover"

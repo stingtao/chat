@@ -15,6 +15,30 @@ async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) 
   });
 }
 
+function toWorkspaceSafeReportPayload<
+  T extends {
+    reporter?: {
+      id: string;
+      username: string;
+      avatar: string | null;
+      email?: string;
+    } | null;
+  },
+>(report: T): T {
+  if (!report.reporter) {
+    return report;
+  }
+
+  return {
+    ...report,
+    reporter: {
+      id: report.reporter.id,
+      username: report.reporter.username,
+      avatar: report.reporter.avatar,
+    },
+  };
+}
+
 // Get spam reports
 export async function GET(
   request: NextRequest,
@@ -149,7 +173,7 @@ export async function PUT(
       type: 'spam_report_updated',
       payload: {
         workspaceId: id,
-        report,
+        report: toWorkspaceSafeReportPayload(report),
       },
       timestamp: Date.now(),
     }).catch((error) => {

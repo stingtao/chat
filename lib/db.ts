@@ -8,8 +8,8 @@ type PrismaClient = NodePrismaClient;
 const isEdgeRuntime = typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'edge';
 
 async function getPrismaConstructor() {
-  const module = await import('@prisma/client');
-  return module.PrismaClient;
+  const prismaModule = await import('@prisma/client');
+  return prismaModule.PrismaClient;
 }
 
 async function getNodePrisma(): Promise<NodePrismaClient> {

@@ -8,10 +8,12 @@ export async function GET(request: NextRequest) {
   try {
     const payload = await authenticateNextRequest(request, 'client');
     if (!payload) {
-      return NextResponse.json(
+      const response = NextResponse.json(
         { success: false, error: 'Unauthorized' },
         { status: 401 }
       );
+      clearSessionCookie(response, 'client');
+      return response;
     }
 
     const prisma = await getPrismaClientFromContext();

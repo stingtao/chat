@@ -4,6 +4,7 @@ import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
 import type { WSMessage } from '@/lib/types';
 import { authenticateNextRequest } from '@/lib/session';
 import { generateRandomString } from '@/lib/utils';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 
@@ -55,7 +56,6 @@ async function loadWorkspaceMemberSnapshot(
       user: {
         select: {
           id: true,
-          email: true,
           username: true,
           avatar: true,
         },
@@ -75,7 +75,7 @@ async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) 
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const payload = await authenticateNextRequest(request, 'client');
+    const payload = await authenticateNextRequest(request, 'client', prisma);
     if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -90,6 +90,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Invite code is required' },
         { status: 400 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'workspace_join',
+      limit: 12,
+      windowMs: 60 * 60 * 1000,
+      identifierParts: [payload.userId, inviteCode],
+      errorMessage: 'Too many join attempts. Please try again later.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     // Find workspace

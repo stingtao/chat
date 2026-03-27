@@ -5,6 +5,32 @@ export interface OAuthProfile {
   picture?: string;
 }
 
+interface GoogleTokenResponse {
+  access_token: string;
+}
+
+interface GoogleUserProfileResponse {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string;
+}
+
+interface LineTokenResponse {
+  access_token: string;
+  id_token: string;
+}
+
+interface LineProfileResponse {
+  userId: string;
+  displayName: string;
+  pictureUrl?: string;
+}
+
+interface LineVerifyResponse {
+  email?: string;
+}
+
 /**
  * Generate random state for CSRF protection
  */
@@ -66,7 +92,7 @@ export const GoogleOAuth = {
       throw new Error('Failed to exchange code for token');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as GoogleTokenResponse;
     return data.access_token;
   },
 
@@ -82,7 +108,7 @@ export const GoogleOAuth = {
       throw new Error('Failed to fetch user profile');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as GoogleUserProfileResponse;
     return {
       id: data.id,
       email: data.email,
@@ -131,7 +157,7 @@ export const LineOAuth = {
       throw new Error('Failed to exchange code for token');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as LineTokenResponse;
     return {
       accessToken: data.access_token,
       idToken: data.id_token,
@@ -150,7 +176,7 @@ export const LineOAuth = {
       throw new Error('Failed to fetch LINE profile');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as LineProfileResponse;
 
     return {
       id: data.userId,
@@ -176,7 +202,11 @@ export const LineOAuth = {
       throw new Error('Failed to verify ID token');
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as LineVerifyResponse;
+    if (!data.email) {
+      throw new Error('Email not available in LINE ID token');
+    }
+
     return data.email;
   },
 };

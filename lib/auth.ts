@@ -1,5 +1,4 @@
 import { SignJWT, jwtVerify } from 'jose';
-import bcrypt from 'bcryptjs';
 import { getCloudflareEnv } from './cloudflare';
 import { generateRandomString, generateUppercaseCode, slugify } from './utils';
 
@@ -7,6 +6,7 @@ export interface JWTPayload {
   userId: string;
   email: string;
   type: 'host' | 'client';
+  sessionVersion?: number;
 }
 
 export const SESSION_COOKIE_NAMES = {
@@ -41,17 +41,9 @@ function getJwtSecret(secretOverride?: string): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, 10);
-}
-
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
-}
-
 export async function generateToken(payload: JWTPayload, secretOverride?: string): Promise<string> {
   const JWT_SECRET = getJwtSecret(secretOverride);
-  const token = await new SignJWT(payload as any)
+  const token = await new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime('7d')
     .setIssuedAt()

@@ -5,6 +5,7 @@ import { ClientUser, Friendship, Group, Workspace } from '@/lib/types';
 import { formatDate, getContrastColor, getInitials, isUserOnline, toDate } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface ConversationListProps {
   workspaces: Workspace[];
@@ -211,7 +212,7 @@ export default function ConversationList({
             }
           >
             {item.avatar ? (
-              <img
+              <ClientImage
                 src={item.avatar}
                 alt={item.name}
                 className="w-full h-full object-cover"
@@ -343,7 +344,7 @@ export default function ConversationList({
                     title={workspace.name}
                   >
                     {workspaceLogo ? (
-                      <img
+                      <ClientImage
                         src={workspaceLogo}
                         alt={workspace.name}
                         className="w-full h-full rounded-2xl object-cover"
@@ -472,7 +473,7 @@ export default function ConversationList({
             <div className="relative flex-shrink-0">
               <div className="w-10 h-10 rounded-full bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center text-white text-sm font-semibold">
                 {currentUser.avatar ? (
-                  <img
+                  <ClientImage
                     src={currentUser.avatar}
                     alt={currentUser.username}
                     className="w-full h-full rounded-full object-cover"

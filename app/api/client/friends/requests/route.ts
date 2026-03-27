@@ -55,7 +55,6 @@ export async function GET(request: NextRequest) {
             id: true,
             username: true,
             avatar: true,
-            email: true,
           },
         },
         receiver: {
@@ -63,7 +62,6 @@ export async function GET(request: NextRequest) {
             id: true,
             username: true,
             avatar: true,
-            email: true,
           },
         },
       },

@@ -8,6 +8,8 @@ export interface CloudflareEnv {
   R2_PUBLIC_BASE_URL?: string;
   ENVIRONMENT?: string;
   JWT_SECRET?: string;
+  FCM_PROJECT_ID?: string;
+  FCM_SERVER_KEY?: string;
 }
 
 export function getCloudflareEnv(): CloudflareEnv | undefined {

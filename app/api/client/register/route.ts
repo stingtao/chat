@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPrismaClientFromContext } from '@/lib/db';
-import { hashPassword, generateToken } from '@/lib/auth';
+import { generateToken } from '@/lib/auth';
+import { hashPassword } from '@/lib/password';
 import { validateEmail, validatePassword } from '@/lib/utils';
 import { normalizeTextInput } from '@/lib/utils';
 import { applySessionCookie } from '@/lib/session';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 const MAX_USERNAME_LENGTH = 30;
 
@@ -34,6 +36,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Invalid email format' },
         { status: 400 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'client_register',
+      limit: 5,
+      windowMs: 60 * 60 * 1000,
+      identifierParts: [email],
+      errorMessage: 'Too many registration attempts. Please try again later.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     if (typeof body.username === 'string' && body.username.trim().length > MAX_USERNAME_LENGTH) {
@@ -78,6 +93,7 @@ export async function POST(request: NextRequest) {
       userId: user.id,
       email: user.email,
       type: 'client',
+      sessionVersion: user.sessionVersion,
     });
 
     const response = NextResponse.json({

@@ -15,6 +15,7 @@ model Host {
   password      String?     // Optional for OAuth users
   name          String
   avatar        String?     // Profile picture URL
+  sessionVersion Int        @default(0)
 
   // OAuth provider fields
   googleId      String?     @unique
@@ -77,6 +78,7 @@ model User {
   password          String?           // Optional for OAuth users
   username          String
   avatar            String?
+  sessionVersion    Int               @default(0)
 
   // OAuth provider fields
   googleId          String?     @unique
@@ -237,6 +239,21 @@ model BlockedUser {
   @@unique([workspaceId, userId])
   @@index([workspaceId])
   @@index([userId])
+}
+
+model RateLimitBucket {
+  id             String   @id @default(uuid())
+  scope          String
+  identifierHash String
+  windowStartAt  DateTime
+  expiresAt      DateTime
+  count          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([scope, identifierHash, windowStartAt])
+  @@index([expiresAt])
+  @@index([scope, expiresAt])
 }
 
 // Spam reports

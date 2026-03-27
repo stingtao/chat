@@ -5,6 +5,7 @@ import { WorkspaceMember } from '@/lib/types';
 import { getInitials, isUserOnline } from '@/lib/utils';
 import { getTranslations } from '@/lib/i18n';
 import { useLang } from '@/hooks/useLang';
+import ClientImage from '@/components/ui/ClientImage';
 
 interface FriendListProps {
   members: WorkspaceMember[];
@@ -107,9 +108,9 @@ export default function FriendList({
                 className="p-4 rounded-xl flex items-center gap-3 hover:bg-gray-50 transition-colors mb-2"
               >
                 <div className="relative w-12 h-12 flex-shrink-0">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-semibold relative overflow-hidden">
                   {member.user.avatar ? (
-                    <img
+                    <ClientImage
                       src={member.user.avatar}
                       alt={member.user.username}
                       className="w-full h-full rounded-full object-cover"
@@ -128,8 +129,6 @@ export default function FriendList({
                     <span className="text-gray-500 font-normal">#{member.memberTag}</span>
                   </h3>
                   <p className="text-sm text-gray-500">
-                    {member.user.email}
-                    <span className="mx-1.5">•</span>
                     {isOnline ? t.chatWindow.online : t.chatWindow.offline}
                   </p>
                 </div>

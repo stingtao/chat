@@ -20,6 +20,30 @@ async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) 
   });
 }
 
+function toWorkspaceSafeBlockedUserPayload<
+  T extends {
+    user?: {
+      id: string;
+      username: string;
+      avatar: string | null;
+      email?: string;
+    } | null;
+  },
+>(blockedUser: T): T {
+  if (!blockedUser.user) {
+    return blockedUser;
+  }
+
+  return {
+    ...blockedUser,
+    user: {
+      id: blockedUser.user.id,
+      username: blockedUser.user.username,
+      avatar: blockedUser.user.avatar,
+    },
+  };
+}
+
 async function loadGroupRealtimeSnapshot(
   prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>,
   groupId: string
@@ -273,7 +297,7 @@ export async function POST(
       type: 'workspace_member_blocked',
       payload: {
         workspaceId: id,
-        blockedUser: blocked,
+        blockedUser: toWorkspaceSafeBlockedUserPayload(blocked),
       },
       timestamp: Date.now(),
     }).catch((error) => {

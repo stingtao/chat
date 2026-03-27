@@ -81,7 +81,6 @@ export async function PUT(request: NextRequest) {
         user: {
           select: {
             id: true,
-            email: true,
             username: true,
             avatar: true,
           },

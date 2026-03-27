@@ -3,6 +3,7 @@ import { getPrismaClientFromContext } from '@/lib/db';
 import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
 import type { WSMessage } from '@/lib/types';
 import { authenticateNextRequest } from '@/lib/session';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'edge';
 
@@ -17,7 +18,7 @@ async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) 
 export async function POST(request: NextRequest) {
   try {
     const prisma = await getPrismaClientFromContext();
-    const payload = await authenticateNextRequest(request, 'client');
+    const payload = await authenticateNextRequest(request, 'client', prisma);
     if (!payload) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized' },
@@ -37,6 +38,19 @@ export async function POST(request: NextRequest) {
         { success: false, error: 'Workspace ID, message ID, and reason are required' },
         { status: 400 }
       );
+    }
+
+    const rateLimitResponse = await enforceRateLimit({
+      prisma,
+      request,
+      scope: 'spam_report_create',
+      limit: 10,
+      windowMs: 60 * 60 * 1000,
+      identifierParts: [payload.userId, workspaceId],
+      errorMessage: 'Too many spam reports. Please try again later.',
+    });
+    if (rateLimitResponse) {
+      return rateLimitResponse;
     }
 
     const membership = await prisma.workspaceMember.findFirst({
@@ -94,7 +108,6 @@ export async function POST(request: NextRequest) {
         reporter: {
           select: {
             id: true,
-            email: true,
             username: true,
             avatar: true,
           },

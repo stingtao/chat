@@ -13,7 +13,7 @@
     "cf-typegen": "wrangler types --env-interface CloudflareEnv env.d.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
-    "db:migrate": "wrangler d1 migrations apply chat-db"
+    "db:migrate": "wrangler d1 migrations apply chat-db --remote"
   },
   "dependencies": {
     "@prisma/adapter-d1": "^5.22.0",

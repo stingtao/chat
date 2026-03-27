@@ -107,7 +107,7 @@ export function useRealtimeChat(options: {
       }
 
       if (message.type === 'new_message') {
-        const payload = message.payload as Message;
+        const payload = message.payload as unknown as Message;
         if (!payload?.id) return;
         if (messageIdsRef.current.has(payload.id)) return;
 
@@ -118,17 +118,23 @@ export function useRealtimeChat(options: {
       }
 
       if (message.type === 'message_read') {
-        callbacksRef.current.onMessageRead?.(message.payload as RealtimeReadPayload);
+        callbacksRef.current.onMessageRead?.(
+          message.payload as unknown as RealtimeReadPayload
+        );
         return;
       }
 
       if (message.type === 'typing_start') {
-        callbacksRef.current.onTypingStart?.(message.payload as RealtimeTypingPayload);
+        callbacksRef.current.onTypingStart?.(
+          message.payload as unknown as RealtimeTypingPayload
+        );
         return;
       }
 
       if (message.type === 'typing_stop') {
-        callbacksRef.current.onTypingStop?.(message.payload as RealtimeTypingPayload);
+        callbacksRef.current.onTypingStop?.(
+          message.payload as unknown as RealtimeTypingPayload
+        );
       }
     };
 
