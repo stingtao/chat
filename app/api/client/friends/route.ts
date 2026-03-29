@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getCloudflareEnv } from '@/lib/cloudflare';
 import { getPrismaClientFromContext } from '@/lib/db';
 import { applyConversationStateMutations } from '@/lib/conversations';
+import {
+  buildAcceptedFriendshipConversationStateMutations,
+  buildFriendshipNotificationData,
+} from '@/lib/friendships';
 import { broadcastToRoom, buildWorkspaceRoomName } from '@/lib/realtime';
 import type { WSMessage } from '@/lib/types';
 import { parseConversationNotificationData } from '@/lib/utils';
-import { NotificationType } from '@/lib/notifications';
+import {
+  createFriendAcceptedNotificationPayload,
+  createFriendRequestNotificationPayload,
+  NotificationType,
+  sendPushNotificationToMany,
+} from '@/lib/notifications';
 import { authenticateNextRequest } from '@/lib/session';
 
 export const runtime = 'edge';
@@ -20,6 +30,83 @@ async function broadcastWorkspaceEvent(workspaceId: string, message: WSMessage) 
     roomName: buildWorkspaceRoomName(workspaceId),
     message,
   });
+}
+
+async function notifyUsers(options: {
+  prisma: Awaited<ReturnType<typeof getPrismaClientFromContext>>;
+  userIds: string[];
+  workspaceId: string;
+  type: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+  serializedData?: string | null;
+}) {
+  if (options.userIds.length === 0) {
+    return;
+  }
+
+  await options.prisma.notification.createMany({
+    data: options.userIds.map((userId) => ({
+      userId,
+      workspaceId: options.workspaceId,
+      type: options.type,
+      title: options.title,
+      body: options.body,
+      data:
+        options.serializedData ??
+        (options.data ? JSON.stringify(options.data) : null),
+    })),
+  });
+
+  const env = getCloudflareEnv();
+  const fcmEnv = {
+    FCM_PROJECT_ID: env?.FCM_PROJECT_ID || process.env.FCM_PROJECT_ID,
+    FCM_SERVER_KEY: env?.FCM_SERVER_KEY || process.env.FCM_SERVER_KEY,
+  };
+
+  const deviceTokens = await options.prisma.deviceToken.findMany({
+    where: {
+      userId: { in: options.userIds },
+      isActive: true,
+    },
+    select: {
+      token: true,
+    },
+  });
+
+  if (deviceTokens.length === 0) {
+    return;
+  }
+
+  void sendPushNotificationToMany(
+    deviceTokens.map((deviceToken) => deviceToken.token),
+    {
+      title: options.title,
+      body: options.body,
+      data: options.data,
+      sound: 'default',
+    },
+    fcmEnv
+  ).catch((error) => {
+    console.error('Friend notification push error:', error);
+  });
+}
+
+function notificationMatchesFriendship(notificationData: string | null, friendshipId: string) {
+  if (!notificationData) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(notificationData) as {
+      friendshipId?: string;
+      requestId?: string;
+    };
+    return parsed.friendshipId === friendshipId || parsed.requestId === friendshipId;
+  } catch {
+    return false;
+  }
 }
 
 // Send friend request
@@ -138,6 +225,34 @@ export async function POST(request: NextRequest) {
         },
       },
     });
+
+    const requestNotification = createFriendRequestNotificationPayload(
+      friendship.sender.username,
+      workspaceId,
+      friendship.id
+    );
+
+    try {
+      await notifyUsers({
+        prisma,
+        userIds: [receiverId],
+        workspaceId,
+        type: NotificationType.FRIEND_REQUEST,
+        title: requestNotification.title,
+        body: requestNotification.body,
+        data: requestNotification.data,
+        serializedData: buildFriendshipNotificationData({
+          type: 'friend_request',
+          workspaceId,
+          friendshipId: friendship.id,
+          senderId: friendship.senderId,
+          receiverId: friendship.receiverId,
+          requestId: friendship.id,
+        }),
+      });
+    } catch (error) {
+      console.error('Friend request notification error:', error);
+    }
 
     void broadcastWorkspaceEvent(workspaceId, {
       type: 'friend_request',
@@ -535,6 +650,75 @@ export async function PUT(request: NextRequest) {
         },
       },
     });
+
+    const friendRequestNotifications = await prisma.notification.findMany({
+      where: {
+        userId: payload.userId,
+        workspaceId: friendship.workspaceId,
+        type: NotificationType.FRIEND_REQUEST,
+        isRead: false,
+      },
+      select: {
+        id: true,
+        data: true,
+      },
+    });
+
+    const handledNotificationIds = friendRequestNotifications
+      .filter((notification) =>
+        notificationMatchesFriendship(notification.data, friendship.id)
+      )
+      .map((notification) => notification.id);
+
+    if (handledNotificationIds.length > 0) {
+      await prisma.notification.updateMany({
+        where: {
+          id: {
+            in: handledNotificationIds,
+          },
+          userId: payload.userId,
+        },
+        data: {
+          isRead: true,
+        },
+      });
+    }
+
+    if (status === 'accepted') {
+      await applyConversationStateMutations(
+        prisma,
+        buildAcceptedFriendshipConversationStateMutations(friendship)
+      );
+
+      const acceptedNotification = createFriendAcceptedNotificationPayload(
+        friendship.receiver.username,
+        friendship.workspaceId,
+        friendship.id,
+        friendship.receiverId
+      );
+
+      try {
+        await notifyUsers({
+          prisma,
+          userIds: [friendship.senderId],
+          workspaceId: friendship.workspaceId,
+          type: NotificationType.FRIEND_ACCEPTED,
+          title: acceptedNotification.title,
+          body: acceptedNotification.body,
+          data: acceptedNotification.data,
+          serializedData: buildFriendshipNotificationData({
+            type: 'friend_accepted',
+            workspaceId: friendship.workspaceId,
+            friendshipId: friendship.id,
+            senderId: friendship.senderId,
+            receiverId: friendship.receiverId,
+            friendId: friendship.receiverId,
+          }),
+        });
+      } catch (error) {
+        console.error('Friend accepted notification error:', error);
+      }
+    }
 
     void broadcastWorkspaceEvent(friendship.workspaceId, {
       type: status === 'accepted' ? 'friend_accepted' : 'friend_request',

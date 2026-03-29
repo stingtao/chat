@@ -146,6 +146,29 @@ export function createFriendRequestNotificationPayload(
       type: 'friend_request',
       workspaceId,
       requestId,
+      friendshipId: requestId,
+    },
+    sound: 'default',
+  };
+}
+
+/**
+ * Create notification payload for friend request acceptance
+ */
+export function createFriendAcceptedNotificationPayload(
+  accepterName: string,
+  workspaceId: string,
+  friendshipId: string,
+  friendId: string
+): PushNotificationPayload {
+  return {
+    title: 'Friend Request Accepted',
+    body: `${accepterName} accepted your friend request`,
+    data: {
+      type: 'friend_accepted',
+      workspaceId,
+      friendshipId,
+      friendId,
     },
     sound: 'default',
   };

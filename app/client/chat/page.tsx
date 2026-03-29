@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChatStore } from '@/stores/chatStore';
 import { api } from '@/lib/api';
@@ -80,6 +80,7 @@ export default function ChatPage() {
   const [authReady, setAuthReady] = useState(false);
   const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const seenFriendRequestIdsRef = useRef<Record<string, Set<string>>>({});
+  const friendshipRefreshRequestIdRef = useRef(0);
   const typingTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const markConversationReadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lang = useLang();
@@ -87,6 +88,7 @@ export default function ChatPage() {
   const withLang = useLangHref();
 
   const hasWorkspace = Boolean(currentWorkspace);
+  const currentWorkspaceId = currentWorkspace?.id || null;
   const workspaceName = currentWorkspace?.name || t.chat.noWorkspaceTitle;
   const workspaceInitials = currentWorkspace?.name
     ? currentWorkspace.name.substring(0, 2).toUpperCase()
@@ -114,26 +116,21 @@ export default function ChatPage() {
     return seenFriendRequestIdsRef.current[workspaceId];
   };
 
-  const incomingPendingFriendRequests =
-    currentWorkspace && user
-      ? pendingFriendRequests.filter(
-          (request) => request.receiverId === user.id && request.status === 'pending'
-        )
-      : [];
+  const incomingPendingFriendRequests = useMemo(
+    () =>
+      currentWorkspace && user
+        ? pendingFriendRequests.filter(
+            (request) => request.receiverId === user.id && request.status === 'pending'
+          )
+        : [],
+    [currentWorkspace, pendingFriendRequests, user]
+  );
   const hasUnseenFriendRequests =
     currentWorkspace && user
       ? incomingPendingFriendRequests.some(
           (request) => !getSeenRequestIds(currentWorkspace.id).has(request.id)
         )
       : false;
-
-  const refreshFriendRequests = useCallback(async (workspaceId: string) => {
-    if (!user) return;
-    const response = await api.getFriendRequests(workspaceId);
-    if (response.success && response.data) {
-      setPendingFriendRequests(response.data as Friendship[]);
-    }
-  }, [user]);
 
   const upsertPendingFriendRequest = useCallback((friendship: Friendship) => {
     setPendingFriendRequests((currentRequests) => {
@@ -406,6 +403,7 @@ export default function ChatPage() {
       return;
     }
 
+    friendshipRefreshRequestIdRef.current += 1;
     const nextWorkspaces = workspaces.filter((workspace) => workspace.id !== workspaceId);
 
     if (showFriendList) {
@@ -435,6 +433,7 @@ export default function ChatPage() {
     currentWorkspace?.id,
     setCurrentConversation,
     setCurrentWorkspace,
+    setFriends,
     setGroups,
     setMessages,
     setWorkspaces,
@@ -462,6 +461,56 @@ export default function ChatPage() {
           : group
       ) || null,
   }), [currentConversationId, currentConversationType]);
+
+  const fetchFriendshipState = useCallback(async (workspaceId: string) => {
+    if (!user) {
+      return {
+        friends: null,
+        requests: null,
+      };
+    }
+
+    const [friendsResponse, requestsResponse] = await Promise.all([
+      api.getFriends(workspaceId),
+      api.getFriendRequests(workspaceId),
+    ]);
+
+    return {
+      friends: friendsResponse.success && friendsResponse.data ? friendsResponse.data : null,
+      requests: requestsResponse.success && requestsResponse.data
+        ? (requestsResponse.data as Friendship[])
+        : null,
+    };
+  }, [user]);
+
+  const applyFriendshipState = useCallback((
+    nextFriends: Friendship[] | null,
+    nextRequests: Friendship[] | null
+  ) => {
+    const nextCollections = applyActiveConversationState(nextFriends, null);
+
+    if (nextCollections.friends) {
+      setFriends(nextCollections.friends);
+    }
+
+    if (nextRequests) {
+      setPendingFriendRequests(nextRequests);
+    }
+  }, [applyActiveConversationState, setFriends]);
+
+  const refreshFriendshipState = useCallback(async (workspaceId: string) => {
+    const requestId = ++friendshipRefreshRequestIdRef.current;
+    const nextFriendshipState = await fetchFriendshipState(workspaceId);
+
+    if (requestId !== friendshipRefreshRequestIdRef.current) {
+      return;
+    }
+
+    applyFriendshipState(
+      nextFriendshipState.friends,
+      nextFriendshipState.requests
+    );
+  }, [applyFriendshipState, fetchFriendshipState]);
 
   const clearTypingUser = useCallback((userId: string) => {
     const timeout = typingTimeoutsRef.current[userId];
@@ -589,6 +638,7 @@ export default function ChatPage() {
       return;
     }
 
+    friendshipRefreshRequestIdRef.current += 1;
     setCurrentConversation(null, null);
     setMessages([]);
     setFriends([]);
@@ -736,15 +786,23 @@ export default function ChatPage() {
 
     if (payload.action === 'rejected') {
       removePendingFriendRequest(friendship.id);
+      void refreshFriendshipState(payload.workspaceId);
       return;
     }
 
     upsertPendingFriendRequest(friendship);
+    void refreshFriendshipState(payload.workspaceId);
 
     if (showFriendRequests && friendship.receiverId === user.id) {
       getSeenRequestIds(payload.workspaceId).add(friendship.id);
     }
-  }, [removePendingFriendRequest, showFriendRequests, upsertPendingFriendRequest, user]);
+  }, [
+    refreshFriendshipState,
+    removePendingFriendRequest,
+    showFriendRequests,
+    upsertPendingFriendRequest,
+    user,
+  ]);
 
   const handleFriendAcceptedEvent = useCallback((payload: FriendAcceptedEventPayload) => {
     if (!user) {
@@ -764,7 +822,13 @@ export default function ChatPage() {
 
     removePendingFriendRequest(friendship.id);
     upsertAcceptedFriendship(friendship);
-  }, [removePendingFriendRequest, upsertAcceptedFriendship, user]);
+    void refreshFriendshipState(payload.workspaceId);
+  }, [
+    refreshFriendshipState,
+    removePendingFriendRequest,
+    upsertAcceptedFriendship,
+    user,
+  ]);
 
   const handleGroupCreatedEvent = useCallback((payload: GroupRealtimeEventPayload) => {
     if (!user || !payload.memberIds.includes(user.id)) {
@@ -934,7 +998,7 @@ export default function ChatPage() {
         const response = await api.getWorkspaces();
         if (response.success && response.data) {
           setWorkspaces(response.data);
-          if (response.data.length > 0 && !currentWorkspace) {
+          if (response.data.length > 0 && !currentWorkspaceId) {
             setCurrentWorkspace(response.data[0]);
           }
         }
@@ -944,32 +1008,34 @@ export default function ChatPage() {
     };
 
     void loadWorkspaces();
-  }, [authReady, user, currentWorkspace?.id, setCurrentWorkspace, setWorkspaces]);
+  }, [authReady, user, currentWorkspaceId, setCurrentWorkspace, setWorkspaces]);
 
   // Load friends and groups when workspace changes
   useEffect(() => {
-    if (!currentWorkspace || !user) return;
+    if (!currentWorkspaceId || !user) return;
 
     let cancelled = false;
     const loadData = async () => {
-      const [friendsResponse, groupsResponse, membersResponse] = await Promise.all([
-        api.getFriends(currentWorkspace.id),
-        api.getGroups(currentWorkspace.id),
-        api.getWorkspaceMembers(currentWorkspace.id),
+      const requestId = ++friendshipRefreshRequestIdRef.current;
+      const [friendshipState, groupsResponse, membersResponse] = await Promise.all([
+        fetchFriendshipState(currentWorkspaceId),
+        api.getGroups(currentWorkspaceId),
+        api.getWorkspaceMembers(currentWorkspaceId),
       ]);
 
-      if (cancelled) {
+      if (cancelled || requestId !== friendshipRefreshRequestIdRef.current) {
         return;
       }
 
-      const nextCollections = applyActiveConversationState(
-        friendsResponse.success && friendsResponse.data ? friendsResponse.data : null,
-        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      applyFriendshipState(
+        friendshipState.friends,
+        friendshipState.requests
       );
 
-      if (nextCollections.friends) {
-        setFriends(nextCollections.friends);
-      }
+      const nextCollections = applyActiveConversationState(
+        null,
+        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      );
 
       if (nextCollections.groups) {
         setGroups(nextCollections.groups);
@@ -992,30 +1058,39 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [applyActiveConversationState, currentWorkspace?.id, user, setFriends, setGroups]);
+  }, [
+    applyActiveConversationState,
+    applyFriendshipState,
+    currentWorkspaceId,
+    fetchFriendshipState,
+    user,
+    setGroups,
+  ]);
 
   useEffect(() => {
-    if (!currentWorkspace || !user) return;
+    if (!currentWorkspaceId || !user) return;
 
     let cancelled = false;
     const refreshConversationCollections = async () => {
-      const [friendsResponse, groupsResponse] = await Promise.all([
-        api.getFriends(currentWorkspace.id),
-        api.getGroups(currentWorkspace.id),
+      const requestId = ++friendshipRefreshRequestIdRef.current;
+      const [friendshipState, groupsResponse] = await Promise.all([
+        fetchFriendshipState(currentWorkspaceId),
+        api.getGroups(currentWorkspaceId),
       ]);
 
-      if (cancelled) {
+      if (cancelled || requestId !== friendshipRefreshRequestIdRef.current) {
         return;
       }
 
-      const nextCollections = applyActiveConversationState(
-        friendsResponse.success && friendsResponse.data ? friendsResponse.data : null,
-        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      applyFriendshipState(
+        friendshipState.friends,
+        friendshipState.requests
       );
 
-      if (nextCollections.friends) {
-        setFriends(nextCollections.friends);
-      }
+      const nextCollections = applyActiveConversationState(
+        null,
+        groupsResponse.success && groupsResponse.data ? groupsResponse.data : null
+      );
 
       if (nextCollections.groups) {
         setGroups(nextCollections.groups);
@@ -1032,34 +1107,47 @@ export default function ChatPage() {
     };
   }, [
     applyActiveConversationState,
-    currentWorkspace?.id,
-    setFriends,
+    applyFriendshipState,
+    currentWorkspaceId,
+    fetchFriendshipState,
     setGroups,
     user,
   ]);
 
   useEffect(() => {
-    if (!currentWorkspace || !user) return;
+    if (!currentWorkspaceId || !user || !workspaceRealtimeConnected) return;
 
-    void refreshFriendRequests(currentWorkspace.id);
-  }, [currentWorkspace?.id, user, refreshFriendRequests]);
+    void refreshFriendshipState(currentWorkspaceId);
+  }, [currentWorkspaceId, refreshFriendshipState, user, workspaceRealtimeConnected]);
 
   useEffect(() => {
-    if (!currentWorkspace || !user || !workspaceRealtimeConnected) return;
+    if (!showFriendRequests || !currentWorkspaceId || !user) {
+      return;
+    }
 
-    void refreshFriendRequests(currentWorkspace.id);
-  }, [currentWorkspace?.id, refreshFriendRequests, user, workspaceRealtimeConnected]);
+    const seenSet = getSeenRequestIds(currentWorkspaceId);
+    incomingPendingFriendRequests.forEach((request) => {
+      seenSet.add(request.id);
+    });
+  }, [
+    currentWorkspaceId,
+    incomingPendingFriendRequests,
+    showFriendRequests,
+    user,
+  ]);
 
   // Load messages when conversation changes
   useEffect(() => {
-    if (!currentWorkspace || !currentConversationId || !currentConversationType || !user) return;
+    if (!currentWorkspaceId || !currentConversationId || !currentConversationType || !user) {
+      return;
+    }
 
     let cancelled = false;
     const loadMessages = async () => {
       setMessagesLoading(true);
       try {
         const response = await api.getMessagesIncremental({
-          workspaceId: currentWorkspace.id,
+          workspaceId: currentWorkspaceId,
           receiverId: currentConversationType === 'direct' ? currentConversationId : undefined,
           groupId: currentConversationType === 'group' ? currentConversationId : undefined,
           limit: 100,
@@ -1082,7 +1170,14 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [currentWorkspace?.id, currentConversationId, currentConversationType, user, clearConversationUnread]);
+  }, [
+    clearConversationUnread,
+    currentConversationId,
+    currentConversationType,
+    currentWorkspaceId,
+    setMessages,
+    user,
+  ]);
 
   useEffect(() => {
     setTypingUserIds([]);
@@ -1207,6 +1302,7 @@ export default function ChatPage() {
     const response = await api.sendFriendRequest(currentWorkspace.id, userId);
     if (response.success && response.data) {
       upsertPendingFriendRequest(response.data);
+      void refreshFriendshipState(currentWorkspace.id);
       toggleFriendList();
       alert(t.chat.friendRequestSent);
     } else {
@@ -1215,13 +1311,21 @@ export default function ChatPage() {
     }
   };
 
+  const handleOpenFriendList = () => {
+    if (!hasWorkspace || !currentWorkspace) {
+      return;
+    }
+
+    if (!showFriendList) {
+      void refreshFriendshipState(currentWorkspace.id);
+    }
+
+    toggleFriendList();
+  };
+
   const handleOpenFriendRequests = () => {
     if (!currentWorkspace || !user) return;
-    const incomingIds = pendingFriendRequests
-      .filter((request) => request.receiverId === user.id)
-      .map((request) => request.id);
-    const seenSet = getSeenRequestIds(currentWorkspace.id);
-    incomingIds.forEach((id) => seenSet.add(id));
+    void refreshFriendshipState(currentWorkspace.id);
     setShowFriendRequests(true);
   };
 
@@ -1240,7 +1344,17 @@ export default function ChatPage() {
     if (status === 'accepted' && response.data) {
       upsertAcceptedFriendship(response.data);
     }
-  }, [removePendingFriendRequest, t.chat, upsertAcceptedFriendship]);
+
+    if (currentWorkspace) {
+      void refreshFriendshipState(currentWorkspace.id);
+    }
+  }, [
+    currentWorkspace,
+    refreshFriendshipState,
+    removePendingFriendRequest,
+    t.chat,
+    upsertAcceptedFriendship,
+  ]);
 
   // Create group
   const handleCreateGroup = async (name: string, memberIds: string[]) => {
@@ -1487,7 +1601,7 @@ export default function ChatPage() {
           </button>
           <button
             type="button"
-            onClick={() => hasWorkspace && toggleFriendList()}
+            onClick={handleOpenFriendList}
             disabled={!hasWorkspace}
             className={`p-2 rounded-full hover:bg-white hover:bg-opacity-20 transition-colors ${
               hasWorkspace ? '' : 'opacity-50 cursor-not-allowed'
@@ -1701,7 +1815,7 @@ export default function ChatPage() {
             .filter((request) => request.receiverId === user?.id)
             .map((request) => request.senderId)}
           onSendFriendRequest={handleSendFriendRequest}
-          onClose={toggleFriendList}
+          onClose={handleOpenFriendList}
         />
       )}
 
