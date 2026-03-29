@@ -5,6 +5,7 @@ import {
   sanitizeFileExtension,
   sanitizeStoragePathSegment,
 } from '@/lib/utils';
+import { buildProtectedFileUrl } from '@/lib/storage';
 import { authenticateNextRequestTypes } from '@/lib/session';
 import { getPrismaClientFromContext } from '@/lib/db';
 import { enforceRateLimit } from '@/lib/rate-limit';
@@ -106,10 +107,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const protectedUrl = `/api/files/${fileName
-      .split('/')
-      .map((segment) => encodeURIComponent(segment))
-      .join('/')}`;
+    const protectedUrl = buildProtectedFileUrl(fileName);
 
     return NextResponse.json({
       success: true,

@@ -2,62 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getCloudflareEnv } from '@/lib/cloudflare';
 import type { JWTPayload } from '@/lib/auth';
 import { getPrismaClientFromContext } from '@/lib/db';
+import { decodeProtectedStoragePath, type DecodedStoragePath } from '@/lib/storage';
 import { authenticateNextRequestTypes } from '@/lib/session';
 import { sanitizeStoragePathSegment } from '@/lib/utils';
 
 export const runtime = 'edge';
 
 type PrismaClient = Awaited<ReturnType<typeof getPrismaClientFromContext>>;
-
-interface DecodedStoragePath {
-  ownerSegment: string;
-  objectKey: string;
-  protectedUrl: string;
-}
-
-function decodeStoragePath(pathSegments: string[]): DecodedStoragePath | null {
-  if (pathSegments.length < 2) {
-    return null;
-  }
-
-  const decodedSegments: string[] = [];
-
-  for (const segment of pathSegments) {
-    let decoded: string;
-
-    try {
-      decoded = decodeURIComponent(segment);
-    } catch {
-      return null;
-    }
-
-    if (
-      !decoded ||
-      decoded === '.' ||
-      decoded === '..' ||
-      decoded.includes('/') ||
-      decoded.includes('\\') ||
-      /[\u0000-\u001f]/.test(decoded)
-    ) {
-      return null;
-    }
-
-    decodedSegments.push(decoded);
-  }
-
-  const [ownerSegment] = decodedSegments;
-  if (ownerSegment !== sanitizeStoragePathSegment(ownerSegment)) {
-    return null;
-  }
-
-  return {
-    ownerSegment,
-    objectKey: decodedSegments.join('/'),
-    protectedUrl: `/api/files/${decodedSegments
-      .map((segment) => encodeURIComponent(segment))
-      .join('/')}`,
-  };
-}
 
 async function canAccessMessageAttachment(
   prisma: PrismaClient,
@@ -284,7 +235,7 @@ export async function GET(
   }
 
   const { path } = await params;
-  const storagePath = decodeStoragePath(path);
+  const storagePath = decodeProtectedStoragePath(path);
   if (!storagePath) {
     return NextResponse.json(
       { success: false, error: 'Invalid file path' },
